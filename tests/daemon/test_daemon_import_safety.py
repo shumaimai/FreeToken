@@ -69,7 +69,10 @@ try:
         def current_pid(self):
             return None
 
-    build_app(
+        def serve_args(self):
+            return ["--gpu", "0"]
+
+    app = build_app(
         manager=_Mgr(),
         ring=importlib.import_module("freetoken.daemon.logring").LogRing(),
         probe=None,
@@ -77,6 +80,14 @@ try:
         lifecycle_pool=ThreadPoolExecutor(1),
         proxy_pool=ThreadPoolExecutor(1),
     )
+    # Exercise the /bench/profile fallback's GPU selector too. It must inspect
+    # the installed Torch build without importing Torch into the daemon.
+    from freetoken.daemon.app import _serve_gpu_uuid
+    _serve_gpu_uuid(["--gpu", "0"])
+    from fastapi.testclient import TestClient
+    response = TestClient(app).get("/bench/profile")
+    if response.status_code != 200:
+        raise RuntimeError("/bench/profile returned " + str(response.status_code))
 except Exception as exc:  # a forbidden import propagates out of import_module as ImportError
     print("daemon import-safety violated: " + repr(exc), file=sys.stderr)
     sys.exit(1)

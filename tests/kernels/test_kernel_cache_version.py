@@ -36,3 +36,29 @@ from freetoken.kernel.utils import _kernel_cache_version_ok
 )
 def test_kernel_cache_version_matrix(cache: str, runtime: str, ok: bool) -> None:
     assert _kernel_cache_version_ok(cache, runtime) is ok
+
+
+def test_rocm_ignores_implicit_cuda_kernel_cache(monkeypatch):
+    from freetoken.kernel import utils
+
+    monkeypatch.delenv(utils.KERNEL_CACHE_DIR_ENV, raising=False)
+    monkeypatch.delenv(utils.DISABLE_KERNEL_CACHE_ENV, raising=False)
+    monkeypatch.setattr(utils, "_is_rocm", lambda: True)
+    monkeypatch.setattr(
+        utils.importlib,
+        "import_module",
+        lambda _name: (_ for _ in ()).throw(
+            AssertionError("ROCm must not import the CUDA kernel-cache package")
+        ),
+    )
+
+    assert utils._kernel_cache_dir() is None
+
+
+def test_rocm_honors_explicit_kernel_cache_override(monkeypatch, tmp_path):
+    from freetoken.kernel import utils
+
+    monkeypatch.setattr(utils, "_is_rocm", lambda: True)
+    monkeypatch.setenv(utils.KERNEL_CACHE_DIR_ENV, str(tmp_path))
+
+    assert utils._kernel_cache_dir() == tmp_path

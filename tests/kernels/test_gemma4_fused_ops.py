@@ -103,9 +103,11 @@ def test_gemma4_router_uses_sgl_kernel_topk_softmax_semantics():
         num_experts=128,
         num_experts_per_tok=8,
     )
-    torch.manual_seed(3)
     router = Gemma4Router(cfg)
-    logits = torch.randn((5, cfg.num_experts), device="cuda", dtype=torch.bfloat16)
+    base_logits = (
+        (torch.arange(cfg.num_experts, device="cuda", dtype=torch.float32) - 64) / 16
+    ).to(torch.bfloat16)
+    logits = torch.stack([torch.roll(base_logits, shifts=17 * i) for i in range(5)])
     per_expert_scale = (
         torch.rand((cfg.num_experts,), device="cuda", dtype=torch.bfloat16) + 0.5
     )

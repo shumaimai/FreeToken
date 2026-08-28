@@ -205,6 +205,13 @@ def _kernel_cache_dir() -> pathlib.Path | None:
     if override:
         return pathlib.Path(override).expanduser()
 
+    # The published companion cache contains CUDA cubins/shared objects only. A
+    # reused environment may still have it installed beside ROCm Torch; ignore it
+    # and build gfx-specific HIP kernels instead. An explicit directory override
+    # above remains available for a future/custom ROCm cache.
+    if _is_rocm():
+        return None
+
     try:
         package = importlib.import_module(KERNEL_CACHE_PACKAGE)
     except ModuleNotFoundError as exc:

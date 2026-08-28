@@ -59,14 +59,33 @@ class BenchBody(BaseModel):
 
 
 def _bench_profile_path(gpu_uuid: str | None) -> str | None:
-    # per-GPU profiles and no torch here: the serve's own card when its --gpu names one, else the newest file
-    from freetoken.moe.bench_profile import default_profile_path, latest_profile_path  # torch-free
-
+    # Keep this stdlib-only. Importing freetoken.moe.bench_profile first executes
+    # freetoken.moe.__init__, which imports the Torch-backed MoE runtime.
+    cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    root = os.path.join(cache, "freetoken")
     if gpu_uuid:
-        path = default_profile_path(gpu_uuid)
+        path = os.path.join(root, "benchbw", f"{gpu_uuid}.json")
         if os.path.isfile(path):
             return path
-    return latest_profile_path()
+    newest: tuple[float, str] | None = None
+    per_gpu = os.path.join(root, "benchbw")
+    try:
+        for name in os.listdir(per_gpu):
+            if not name.endswith(".json"):
+                continue
+            path = os.path.join(per_gpu, name)
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            if newest is None or mtime > newest[0]:
+                newest = (mtime, path)
+    except OSError:
+        pass
+    if newest is not None:
+        return newest[1]
+    legacy = os.path.join(root, "benchbw.json")
+    return legacy if os.path.isfile(legacy) else None
 
 
 def _serve_gpu_uuid(args: list[str]) -> str | None:

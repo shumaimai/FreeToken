@@ -1026,12 +1026,18 @@ def _ensure_expandable_segments() -> None:
     ``expandable_segments`` lets freed regions of any size be reused, keeping
     reserved ~= allocated, so it is applied to every run, not just offload ones.
 
+    ROCm is excluded: PyTorch 2.11's HIP allocator can report ample free VRAM after
+    graph capture but fail the next allocation when expandable segments are enabled.
+
     Env vars are parsed once at import and ignored if set afterwards, so we apply the
     setting via the runtime API instead. Must run before the first CUDA allocation (the
     caller guarantees CUDA is not yet initialized). Any user-provided allocator config
     is respected and left untouched.
     """
     if os.environ.get("PYTORCH_ALLOC_CONF") or os.environ.get("PYTORCH_CUDA_ALLOC_CONF"):
+        return
+    if getattr(torch.version, "hip", None) is not None:
+        logger.info_rank0("Keeping ROCm's default allocator for HIP graph compatibility")
         return
     try:
         torch.cuda.memory._set_allocator_settings("expandable_segments:True")

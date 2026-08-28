@@ -38,7 +38,7 @@ _MMA_TOL = dict(rtol=5e-2, atol=0.5)
 
 
 def _native_cc() -> bool:
-    return torch.cuda.get_device_capability() >= (8, 9)
+    return torch.version.hip is None and torch.cuda.get_device_capability() >= (8, 9)
 
 
 # ======================================================================================
@@ -271,6 +271,7 @@ def test_forced_emu_matches_native(tmp_path):
 # 3. Cross-arch compile gate (full wrapper->kernel paths, compile-only).
 # ======================================================================================
 @pytest.mark.slow
+@pytest.mark.skipif(torch.version.hip is not None, reason="CUDA foreign-SM compile gate")
 @pytest.mark.parametrize("arch", [80, 86, 89, 120])
 def test_compile_gate_foreign_arch(arch, tmp_path):
     r = subprocess.run(
