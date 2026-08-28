@@ -10,6 +10,14 @@
 | <a href="https://www.flashml.ai/"><b>Download</b></a> | <a href="https://arxiv.org/abs/2608.16157"><b>Paper</b></a> | <a href="https://join.slack.com/t/flashml/shared_invite/zt-3zpdh5j10-9dwTXrgLiqpVxizhA9KVbA"><b>Developer Slack</b></a> | <a href="https://discord.gg/xzwSnMdsX"><b>Community Discord</b></a> | <a href="https://github.com/FlashML-org/FreeToken/blob/main/assets/freetoken-wechatgroup.png"><b>Community WeChat</b></a> |
 </p>
 
+> [!IMPORTANT]
+> This is an unofficial experimental ROCm fork of
+> [FlashML-org/FreeToken](https://github.com/FlashML-org/FreeToken), focused on
+> AMD RDNA3/RDNA4 source builds and tested primarily on an RX 7800 XT under
+> WSL2. It is not an official FlashML release. See
+> [the ROCm installation notes](docs/install.md) and
+> [RX 7800 XT measurements](docs/rx7800xt-offload-results.md).
+
 
 Unlock datacenter-class intelligence on the hardware you already own — Run 290B+ frontier MoE models locally on your gaming PC at blistering interactive speeds.
 
@@ -51,10 +59,11 @@ uv pip install -e ".[accel]"
 
 For More details:
 
-- [Install FreeToken](https://github.com/FlashML-org/FreeToken/blob/main/docs/install.md)
-- [Quick start](https://github.com/FlashML-org/FreeToken/blob/main/docs/quickstart.md)
-- [Supported models](https://github.com/FlashML-org/FreeToken/blob/main/docs/models.md)
-- [CLI reference](https://github.com/FlashML-org/FreeToken/blob/main/docs/cli.md)
+- [Install FreeToken](docs/install.md)
+- [Quick start](docs/quickstart.md)
+- [Supported models](docs/models.md)
+- [CLI reference](docs/cli.md)
+- [External llama.cpp RX 7800 XT experiments](docs/rx7800xt-llama-cpp-results.md)
 
 ## Citation
 
@@ -81,4 +90,5 @@ learned the design and reused code from the following projects:
 
 ## License
 
-[Apache License 2.0](https://github.com/FlashML-org/FreeToken/blob/main/LICENSE).
+[Apache License 2.0](LICENSE). Third-party source attributions and compatible
+license notices are collected in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -1,0 +1,115 @@
+{
+  "model": "Qwen/Qwen3.8-27B",
+  "hardware": {
+    "gpu": "AMD Radeon RX 7800 XT",
+    "gpu_arch": "gfx1101",
+    "gpu_memory_bytes": 16962809856,
+    "cpu": "AMD Ryzen 7 5800X3D",
+    "physical_ram_gib": 32,
+    "wsl_ram_bytes": 30483828736,
+    "wsl_swap_bytes": 17179869184
+  },
+  "runtime": {
+    "implementation": "llama.cpp",
+    "commit": "511f9c1379a52516f328859af86daa124eddc717",
+    "backend": "ROCm",
+    "rocm_version": "7.2.4",
+    "build_architecture": "gfx1101",
+    "required_environment": "HSA_ENABLE_DXG_DETECTION=1"
+  },
+  "variants": [
+    {
+      "name": "qwen3.8-27b-abliterated-3.69bpw-12GB-MTP.gguf",
+      "repository": null,
+      "provenance_note": "Local test artifact; the original distribution repository was not recorded.",
+      "file_bytes": 12599187808,
+      "sha256": "17ef7767533efd039d13594603bb0d9a787965759ec653b42f9221b50318e4d7",
+      "llama_model_bytes_excluding_unused_mtp": 12588191744,
+      "llama_quant_description": "IQ2_S - 2.5 bpw",
+      "placement": {
+        "gpu_layers": 99,
+        "context_tokens": 4096,
+        "flash_attention": true,
+        "observed_process_max_rss_kib": 12542968,
+        "observed_vram_used_bytes": 13652717568,
+        "observed_swap_kib": 0
+      },
+      "llama_bench": {
+        "prompt_tokens": 512,
+        "completion_tokens": 128,
+        "repetitions": 3,
+        "prompt_tps_mean": 595.556812,
+        "prompt_tps_stddev": 15.373346,
+        "decode_tps_mean": 23.39895,
+        "decode_tps_stddev": 0.020299,
+        "decode_tps_samples": [
+          23.3853,
+          23.4223,
+          23.3893
+        ]
+      },
+      "streaming_ttft": {
+        "api": "llama-server /completion SSE",
+        "temperature": 0.0,
+        "cache_prompt": false,
+        "completion_tokens": 64,
+        "ttft_s_samples": [
+          0.4519887,
+          0.6785974,
+          0.682176
+        ],
+        "median_ttft_s": 0.6785974
+      }
+    },
+    {
+      "name": "Qwen3.8-27B-UD-Q8_K_XL.gguf",
+      "repository": "unsloth/Qwen3.8-27B-GGUF",
+      "file_bytes": 31457991680,
+      "sha256": "af36ecb6b5db1407953345b746c14ac93f0657dda413910b4348683a2d990377",
+      "placement": {
+        "gpu_layers": "automatic partial offload",
+        "fit_target_mib": 1536,
+        "context_tokens": 4096,
+        "flash_attention": true,
+        "observed_probe_max_rss_kib": 27646372,
+        "observed_vram_used_bytes": 14670069760,
+        "observed_swap_kib": 0
+      },
+      "probe": {
+        "prompt_tokens": 64,
+        "completion_tokens": 16,
+        "prompt_tps": 3.671475,
+        "decode_tps": 1.216183
+      },
+      "streaming_runs": [
+        {
+          "ttft_s": 3.7368867,
+          "prompt_tps": 6.0151313363,
+          "decode_tps": 1.1971489627,
+          "total_s": 29.6576763
+        },
+        {
+          "ttft_s": 3.8091438,
+          "prompt_tps": 6.5465454921,
+          "decode_tps": 1.2130144081,
+          "total_s": 29.3675693
+        },
+        {
+          "ttft_s": 3.713685,
+          "prompt_tps": 7.0128373175,
+          "decode_tps": 1.2170040274,
+          "total_s": 29.1966294
+        }
+      ],
+      "median_ttft_s": 3.7368867,
+      "median_prompt_tps": 6.5465454921,
+      "median_decode_tps": 1.2130144081
+    }
+  ],
+  "notes": [
+    "These are llama.cpp measurements and do not measure FreeToken.",
+    "The 12.6 GB variant is the practical-speed configuration on this machine.",
+    "UD-Q8_K_XL is the largest and highest-quality tested 27B quant, but CPU/GPU hybrid execution is not practical at about 1.21 token/s.",
+    "Docker Desktop remained running throughout the measurement."
+  ]
+}

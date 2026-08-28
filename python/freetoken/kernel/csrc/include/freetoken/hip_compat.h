@@ -8,10 +8,10 @@
 // resolves to the original CUDA symbol, so there is zero overhead.
 //
 // Supported ROCm targets:
-//   gfx1100 — RX 7900 XTX / XT
-//   gfx1101 — RX 7900 GRE
-//   gfx1102 — RX 7700 / XT
-//   gfx1103 — RX 7600 / XT
+//   gfx1100 — RX 7900 XTX / XT / GRE
+//   gfx1101 — RX 7800 XT / RX 7700 XT
+//   gfx1102 — RX 7600 / XT
+//   gfx1103 — RDNA3 APUs such as Radeon 780M
 //   gfx1200 — RX 9060 family
 //   gfx1201 — RX 9070 family / Radeon AI PRO R9700
 

@@ -1,0 +1,97 @@
+{
+  "model": "Qwen/Qwen3.8-Flash-Next",
+  "quantization": {
+    "repository": "AtomicChat/Qwen3.8-Flash-Next-GGUF",
+    "variant": "AD-3.84bpw-IQ4_XS-M64",
+    "architecture": "qwen4exp",
+    "parameters": 176943899520,
+    "shard_count": 28,
+    "total_file_bytes": 84930924160,
+    "ple_shard_bytes": 38400184512,
+    "non_ple_file_bytes": 46530739648,
+    "all_shards_sha256_verified": true
+  },
+  "hardware": {
+    "gpu": "AMD Radeon RX 7800 XT",
+    "gpu_arch": "gfx1101",
+    "gpu_memory_bytes": 16962809856,
+    "cpu": "AMD Ryzen 7 5800X3D",
+    "physical_ram_gib": 32,
+    "wsl_ram_bytes": 30483828736,
+    "wsl_swap_bytes": 17179869184
+  },
+  "runtime": {
+    "implementation": "llama.cpp",
+    "commit": "511f9c1379a52516f328859af86daa124eddc717",
+    "backend": "ROCm",
+    "rocm_version": "7.2.4",
+    "build_architecture": "gfx1101",
+    "required_environment": "HSA_ENABLE_DXG_DETECTION=1"
+  },
+  "placement": {
+    "gpu_layers": 14,
+    "context_tokens": 512,
+    "parallel_slots": 1,
+    "batch_tokens": 64,
+    "ubatch_tokens": 64,
+    "flash_attention": true,
+    "fit": false,
+    "load_mode": "mmap",
+    "tensor_read_lazy": true,
+    "ple_location": "SSD-backed lazy mmap",
+    "observed_process_rss_high_water_kib": 26882220,
+    "observed_process_rss_high_water_gib": 25.637,
+    "observed_process_swap_kib": 0,
+    "observed_vram_used_bytes": 15315292160,
+    "observed_vram_used_gib": 14.263
+  },
+  "method": {
+    "api": "llama-server /completion SSE",
+    "temperature": 0.0,
+    "cache_prompt": false,
+    "prompt_tokens": 22,
+    "completion_tokens": 32,
+    "ttft_definition": "seconds from HTTP request start to first response body byte",
+    "startup_seconds": 167.08
+  },
+  "runs": [
+    {
+      "ttft_s": 18.9785517,
+      "prompt_tps": 1.1639818104,
+      "decode_tps": 1.2344975481,
+      "total_s": 44.1150098
+    },
+    {
+      "ttft_s": 15.0974806,
+      "prompt_tps": 1.5841576173,
+      "decode_tps": 0.3642175737,
+      "total_s": 100.2890609
+    },
+    {
+      "ttft_s": 13.1082711,
+      "prompt_tps": 2.2000151801,
+      "decode_tps": 1.094108315,
+      "total_s": 41.4698117
+    }
+  ],
+  "median_ttft_s": 15.0974806,
+  "median_prompt_tps": 1.5841576173,
+  "median_decode_tps": 1.094108315,
+  "decode_tps_range": [
+    0.3642175737,
+    1.2344975481
+  ],
+  "sanity_check": {
+    "api": "OpenAI-compatible chat completions with Jinja and thinking disabled",
+    "prompt": "What is two plus two? Answer in one short sentence.",
+    "response": "Two plus two equals four.",
+    "http_status": 200
+  },
+  "notes": [
+    "These are llama.cpp measurements and do not measure FreeToken.",
+    "The 38.40 GB PLE n-gram tensor remained pageable in shard 2 instead of becoming resident.",
+    "The large decode variance is consistent with SSD-backed PLE page-in and memory pressure.",
+    "A separate one-token cold probe loaded in 98.87 seconds, reached 26482056 KiB maximum RSS, and used no swap.",
+    "Docker Desktop remained running throughout the measurement."
+  ]
+}

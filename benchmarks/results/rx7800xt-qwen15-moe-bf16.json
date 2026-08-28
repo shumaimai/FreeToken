@@ -1,0 +1,47 @@
+{
+  "model": "Qwen/Qwen1.5-MoE-A2.7B-Chat",
+  "hardware": {
+    "gpu": "AMD Radeon RX 7800 XT",
+    "gpu_arch": "gfx1101",
+    "cpu": "AMD Ryzen 7 5800X3D",
+    "physical_ram_gib": 32,
+    "wsl_ram_gib": 29,
+    "wsl_swap_gib": 16
+  },
+  "placement": {
+    "checkpoint_bytes": 28632144944,
+    "expert_bank_bytes": 24914165760,
+    "dense_shared_bytes": 3717402624,
+    "cpu_moe_layers": 10,
+    "gpu_offload_moe_layers": 14,
+    "gpu_expert_cache_slots": 525,
+    "kv_tokens": 2048,
+    "pytorch_reserved_vram_bytes": 13430161408,
+    "observed_host_ram_gib": 27,
+    "observed_swap_gib": 2.4,
+    "pin_budget_gib": 14
+  },
+  "method": {
+    "api": "OpenAI streaming chat completions",
+    "temperature": 0.0,
+    "ignore_eos": true,
+    "completion_budget": 512,
+    "api_completion_tokens": 511,
+    "visible_sse_events": 511,
+    "measured_intervals": 510
+  },
+  "runs": [
+    {"ttft_s": 2.623251584, "decode_s": 35.236225985, "decode_tps": 14.4737407524, "tail64_tps": 14.5636722154, "tail128_tps": 14.4950335455, "output_sha1": "2e0ee0436e57"},
+    {"ttft_s": 2.102080685, "decode_s": 34.834565159, "decode_tps": 14.6406305826, "tail64_tps": 14.7507067933, "tail128_tps": 14.7257996427, "output_sha1": "2e0ee0436e57"},
+    {"ttft_s": 2.086999984, "decode_s": 34.811836308, "decode_tps": 14.6501895358, "tail64_tps": 14.7646667104, "tail128_tps": 14.7533466014, "output_sha1": "2e0ee0436e57"}
+  ],
+  "median_decode_tps": 14.6406305826,
+  "median_tail64_tps": 14.7507067933,
+  "median_tail128_tps": 14.7257996427,
+  "median_ttft_s": 2.102080685,
+  "pin_limit_trials": {
+    "14_gib": "pass",
+    "15_gib": "cudaHostRegister failed",
+    "16_gib": "cudaHostRegister failed"
+  }
+}

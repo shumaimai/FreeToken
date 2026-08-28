@@ -12,6 +12,7 @@ for them; other checkpoints of the same architectures work too.
 | Qwen3.6 / Qwen3.5 MoE | [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) ([-FP8](https://huggingface.co/Qwen/Qwen3.6-35B-A3B-FP8)), [nvidia/Qwen3.6-35B-A3B-NVFP4](https://huggingface.co/nvidia/Qwen3.6-35B-A3B-NVFP4), [Qwen/Qwen3.5-35B-A3B](https://huggingface.co/Qwen/Qwen3.5-35B-A3B) ([-FP8](https://huggingface.co/Qwen/Qwen3.5-35B-A3B-FP8)) |
 | Qwen3.6 dense | [Qwen/Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) ([-FP8](https://huggingface.co/Qwen/Qwen3.6-27B-FP8)), [nvidia/Qwen3.6-27B-NVFP4](https://huggingface.co/nvidia/Qwen3.6-27B-NVFP4) |
 | Qwen3-MoE | [Qwen/Qwen3-30B-A3B](https://huggingface.co/Qwen/Qwen3-30B-A3B) |
+| Qwen2-MoE | [Qwen/Qwen1.5-MoE-A2.7B-Chat](https://huggingface.co/Qwen/Qwen1.5-MoE-A2.7B-Chat) |
 | gpt-oss | [openai/gpt-oss-120b](https://huggingface.co/openai/gpt-oss-120b), [openai/gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b) |
 | Gemma-4 | [google/gemma-4-26B-A4B-it](https://huggingface.co/google/gemma-4-26B-A4B-it), [nvidia/Gemma-4-26B-A4B-NVFP4](https://huggingface.co/nvidia/Gemma-4-26B-A4B-NVFP4), [google/gemma-4-12B-it](https://huggingface.co/google/gemma-4-12B-it), [nvidia/Gemma-4-31B-IT-NVFP4](https://huggingface.co/nvidia/Gemma-4-31B-IT-NVFP4) .. |
 | MiniMax-M2.5 | [nvidia/MiniMax-M2.5-NVFP4](https://huggingface.co/nvidia/MiniMax-M2.5-NVFP4) |
@@ -30,6 +31,19 @@ for them; other checkpoints of the same architectures work too.
 - **auto** — dense models always resolve to `fused`; MoE models resolve to
   `offload`, upgraded to `hybrid` when a cached `ft bench bw` profile
   recommends it.
+
+On a 16 GiB RX 7800 XT, the `openai/gpt-oss-20b` MXFP4 experts fit resident.
+The RX 7800 XT launch profile therefore explicitly selects
+`--moe-backend fused`; see `scripts/serve-gpt-oss-20b-rx7800xt.sh`.
+
+`Qwen/Qwen1.5-MoE-A2.7B-Chat` is the measured unquantized offload target for a
+32 GiB RAM + 16 GiB RX 7800 XT machine. Its 23.20 GiB BF16 routed-expert bank
+stays in host RAM while dense/shared weights and a unified expert cache use the
+GPU. See `scripts/serve-qwen15-moe-rx7800xt.sh`.
+
+Dense Qwen3.8-27B BF16 is not an expert-offload target: it has no routed experts,
+and its 51.75 GiB checkpoint exceeds the combined physical RAM and VRAM before
+runtime memory.
 
 ## Notes
 

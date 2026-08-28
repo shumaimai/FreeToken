@@ -40,7 +40,7 @@ parsers all resolve automatically from the checkpoint and the GPU.
 |---|---|---|
 | `--host` | 127.0.0.1 | Bind address |
 | `--port` | 1919 | Bind port |
-| `--gpu` | GPU 0 | GPU to run on: a UUID from `nvidia-smi -L` or an `nvidia-smi` index; see [below](#choosing-a-gpu) |
+| `--gpu` | GPU 0 | GPU to run on: a visible ordinal, or an NVIDIA UUID; see [below](#choosing-a-gpu) |
 | `--max-running-requests` | 4 | Max concurrently running requests |
 | `--max-output-tokens` | 32768 | Default output budget for requests that omit one |
 | `--max-seq-len-override` | from checkpoint | Max sequence length |
@@ -62,6 +62,9 @@ GPU 1: NVIDIA GeForce RTX 5090 (UUID: GPU-9e8d7c6b-5a49-4f13-8207-c1b0a4e6d3f5)
 ft serve --model ... --gpu 1             # by nvidia-smi index -- the 5090
 ft serve --model ... --gpu GPU-9e8d7c6b  # the same card by UUID (a unique prefix is enough)
 ```
+
+On ROCm, use the visible ordinal (for example `--gpu 0`). NVIDIA NVML UUID
+resolution is intentionally bypassed when NVML is unavailable.
 
 ### KV cache & memory
 
