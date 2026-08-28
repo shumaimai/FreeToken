@@ -147,7 +147,7 @@ sets an allocator configuration.
 ## Method 2: Install from source
 
 ```bash
-git clone https://github.com/FlashML-org/FreeToken.git && cd FreeToken
+git clone https://github.com/shumaimai/FreeToken.git && cd FreeToken
 uv venv && source .venv/bin/activate
 uv pip install -e ".[accel]"
 ```
