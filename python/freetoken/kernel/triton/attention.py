@@ -11,6 +11,31 @@ _MAX_KV_SPLITS = 8
 _MIN_BLOCK_KV = 32
 
 
+def _gfx1101_decode_split_policy(
+    batch: int,
+    num_q_heads: int,
+    num_kv_heads: int,
+    head_dim: int,
+) -> tuple[int, int]:
+    """Return ``(long-context threshold, short-context split cap)`` for gfx1101.
+
+    A static 16-slot grid keeps HIP graphs reusable. The active count stays below
+    that capacity until the extra wave amortizes its merge cost. Eight splits
+    already launch at least one full 60-CU wave once batch/head parallelism is high.
+    """
+    group = num_q_heads // num_kv_heads
+    valid_block_h = min(16, group)
+    head_blocks = num_kv_heads * triton.cdiv(group, valid_block_h)
+    programs_at_eight = batch * head_blocks * 8
+    if batch == 1 and head_dim <= 128:
+        return (2048, 8) if head_blocks >= 8 else (8192, 8)
+    if batch == 1:
+        return 256, 4
+    if programs_at_eight >= 60:
+        return 8192, 8
+    return (2048, 8) if head_dim > 128 else (8192, 8)
+
+
 @functools.lru_cache(maxsize=None)
 def _optin_smem_bytes(device_index: int) -> int:
     """Per-block opt-in shared-memory budget for a CUDA device (0 if unavailable)."""
@@ -179,6 +204,8 @@ def _decode_grouped_stage1_kernel(
     D: tl.constexpr,
     DV: tl.constexpr,
     SLIDING_WINDOW: tl.constexpr,
+    ADAPTIVE_SPLIT_LIMIT: tl.constexpr,
+    ADAPTIVE_SHORT_SPLITS: tl.constexpr,
 ):
     batch_id = tl.program_id(0)
     head_block_id = tl.program_id(1)
@@ -188,10 +215,15 @@ def _decode_grouped_stage1_kernel(
     # BLOCK_H is the power-of-two tile size for the head axis (tl.arange requires a power of two),
     # so a non-power-of-two GQA group (e.g. 24/4 == 6) rounds the tile up and masks the extra
     # lanes. Each kv head spans cdiv(GROUP, VALID_BLOCK_H) head blocks.
-    kv_head = head_block_id // tl.cdiv(GROUP, VALID_BLOCK_H)
-    q_heads = head_block_id * VALID_BLOCK_H + tl.arange(0, BLOCK_H)
-    mask_h = q_heads < (head_block_id + 1) * VALID_BLOCK_H
-    mask_h = mask_h & (q_heads < NUM_Q_HEADS)
+    head_blocks_per_kv = tl.cdiv(GROUP, VALID_BLOCK_H)
+    kv_head = head_block_id // head_blocks_per_kv
+    local_head_block = head_block_id % head_blocks_per_kv
+    q_heads = (
+        kv_head * GROUP
+        + local_head_block * VALID_BLOCK_H
+        + tl.arange(0, BLOCK_H)
+    )
+    mask_h = q_heads < tl.minimum((kv_head + 1) * GROUP, NUM_Q_HEADS)
 
     offs_d = tl.arange(0, BLOCK_D)
     offs_dv = tl.arange(0, BLOCK_DV)
@@ -208,6 +240,12 @@ def _decode_grouped_stage1_kernel(
     effective_len = tl.maximum(0, effective_end - effective_start)
 
     kv_splits = tl.load(num_kv_splits_ptr + batch_id)
+    if ADAPTIVE_SPLIT_LIMIT > 0:
+        kv_splits = tl.where(
+            effective_len < ADAPTIVE_SPLIT_LIMIT,
+            tl.minimum(kv_splits, ADAPTIVE_SHORT_SPLITS),
+            kv_splits,
+        )
     kv_len_per_split = (
         tl.cdiv(tl.cdiv(effective_len, kv_splits), MIN_BLOCK_KV) * MIN_BLOCK_KV
     )
@@ -293,6 +331,8 @@ def _decode_stage2_kernel(
     DV: tl.constexpr,
     SLIDING_WINDOW: tl.constexpr,
     HAS_SINKS: tl.constexpr,
+    ADAPTIVE_SPLIT_LIMIT: tl.constexpr,
+    ADAPTIVE_SHORT_SPLITS: tl.constexpr,
 ):
     batch_id = tl.program_id(0)
     q_head = tl.program_id(1)
@@ -306,6 +346,12 @@ def _decode_stage2_kernel(
     effective_len = tl.maximum(0, effective_end - effective_start)
 
     kv_splits = tl.load(num_kv_splits_ptr + batch_id)
+    if ADAPTIVE_SPLIT_LIMIT > 0:
+        kv_splits = tl.where(
+            effective_len < ADAPTIVE_SPLIT_LIMIT,
+            tl.minimum(kv_splits, ADAPTIVE_SHORT_SPLITS),
+            kv_splits,
+        )
     kv_len_per_split = (
         tl.cdiv(tl.cdiv(effective_len, kv_splits), MIN_BLOCK_KV) * MIN_BLOCK_KV
     )
@@ -364,6 +410,7 @@ def decode_paged_attention(
     sliding_window: int | None = None,
     sinks: torch.Tensor | None = None,
     out: torch.Tensor | None = None,
+    enable_gfx1101_adaptive_splits: bool = True,
 ) -> torch.Tensor:
     """SGLang-style split-k grouped decode attention for one query per request."""
 
@@ -396,11 +443,30 @@ def decode_paged_attention(
     # (e.g. 6), where block_h rounds up and the kernel masks the extra lanes.
     valid_block_h = min(16, group)
     block_h = triton.next_power_of_2(valid_block_h)
+    from freetoken.utils.arch import get_rocm_gfx_arch, is_gfx11xx_family
+
+    if is_gfx11xx_family():
+        # RDNA3 WMMA requires a 16-row M tile. Smaller GQA groups are masked below.
+        block_h = max(block_h, 16)
     block_d = triton.next_power_of_2(head_dim)
     block_dv = triton.next_power_of_2(head_dim)
 
+    split_limit, short_splits = 0, max_kv_splits
+    if (
+        enable_gfx1101_adaptive_splits
+        and get_rocm_gfx_arch() == "gfx1101"
+        and max_kv_splits > 8
+    ):
+        split_limit, short_splits = _gfx1101_decode_split_policy(
+            batch, num_q_heads, num_kv_heads, head_dim
+        )
+
     _decode_grouped_stage1_kernel[
-        (batch, triton.cdiv(num_q_heads, valid_block_h), max_kv_splits)
+        (
+            batch,
+            num_kv_heads * triton.cdiv(group, valid_block_h),
+            max_kv_splits,
+        )
     ](
         q,
         k_cache,
@@ -435,6 +501,8 @@ def decode_paged_attention(
         D=head_dim,
         DV=head_dim,
         SLIDING_WINDOW=sliding_window or 0,
+        ADAPTIVE_SPLIT_LIMIT=split_limit,
+        ADAPTIVE_SHORT_SPLITS=short_splits,
         num_warps=4,
         num_stages=2,
     )
@@ -460,6 +528,8 @@ def decode_paged_attention(
         DV=head_dim,
         SLIDING_WINDOW=sliding_window or 0,
         HAS_SINKS=sinks is not None,
+        ADAPTIVE_SPLIT_LIMIT=split_limit,
+        ADAPTIVE_SHORT_SPLITS=short_splits,
         num_warps=4,
         num_stages=2,
     )

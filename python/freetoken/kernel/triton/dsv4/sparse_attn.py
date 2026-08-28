@@ -38,6 +38,9 @@ from __future__ import annotations
 import torch
 import triton
 import triton.language as tl
+from triton.language import target_info
+
+from freetoken.utils.arch import is_rocm
 
 BLOCK_H = 16
 # The gather has exactly ONE tl.load site (the pool base is selected per column), so it stages
@@ -86,35 +89,79 @@ def _sparse_attn_paged_kernel(
         n_active = N_WINDOW + tl.load(cnt_ptr + pid_b * stride_nb + pid_m * stride_nm)
 
     idx_base = idx_ptr + pid_b * stride_ib + pid_m * stride_im
-    for t in range(0, tl.cdiv(n_active, BLOCK_T)):
-        offs_t = t * BLOCK_T + tl.arange(0, BLOCK_T)
-        t_mask = offs_t < n_active
-        idxs = tl.load(idx_base + offs_t * stride_it, mask=t_mask, other=-1)
-        valid = idxs >= 0
-        # Window-first partition: top-k column j < N_WINDOW reads window_pool, else cmp_pool.
-        # Both pools are contiguous [*, D] with identical strides (asserted in the wrapper), so we
-        # select the per-column pool BASE pointer and issue a SINGLE gather load. Keeping exactly
-        # one ``tl.load`` site (rather than a two-pool ``tl.where`` over two loaded tiles, or an
-        # if/elif/else with several load sites) stops Triton's software pipeliner from staging
-        # multiple KV tiles in shared memory. Result is bit-identical to the two-pool form -- each
-        # column still reads from the same pool/slot.
-        is_win = offs_t < N_WINDOW
-        base = tl.where(is_win, win_ptr, cmp_ptr)  # [BLOCK_T] per-column pool base pointer
-        kv_ptrs = base[:, None] + idxs[:, None] * stride_wn + offs_d[None, :] * stride_wd
-        kv = tl.load(kv_ptrs, mask=valid[:, None], other=0.0).to(tl.float32)  # [BLOCK_T, D]
+    if target_info.is_hip():
+        # Triton 3.7's AMD pointer canonicalizer cannot lower a lane-wise selection between two
+        # scalar base pointers. Keep each HIP loop on one pool; CUDA retains the single-load path
+        # below so its software pipeline does not stage both pools.
+        for t in range(0, tl.cdiv(N_WINDOW, BLOCK_T)):
+            offs_t = t * BLOCK_T + tl.arange(0, BLOCK_T)
+            t_mask = offs_t < N_WINDOW
+            idxs = tl.load(idx_base + offs_t * stride_it, mask=t_mask, other=-1)
+            valid = t_mask & (idxs >= 0)
+            safe_idxs = tl.where(valid, idxs, 0)
+            kv_ptrs = (
+                win_ptr
+                + safe_idxs[:, None] * stride_wn
+                + offs_d[None, :] * stride_wd
+            )
+            kv = tl.load(kv_ptrs, mask=valid[:, None], other=0.0).to(tl.float32)
 
-        scores = tl.dot(q, tl.trans(kv)) * scale  # [BLOCK_H, BLOCK_T]
-        scores = tl.where(valid[None, :], scores, -float("inf"))
+            scores = tl.dot(q, tl.trans(kv)) * scale
+            scores = tl.where(valid[None, :], scores, -float("inf"))
+            m_new = tl.maximum(m_i, tl.max(scores, axis=1))
+            alpha = tl.where(m_new == -float("inf"), 1.0, tl.exp(m_i - m_new))
+            p = tl.where(valid[None, :], tl.exp(scores - m_new[:, None]), 0.0)
+            l_i = l_i * alpha + tl.sum(p, axis=1)
+            acc = acc * alpha[:, None] + tl.dot(p.to(kv.dtype), kv)
+            m_i = m_new
 
-        m_new = tl.maximum(m_i, tl.max(scores, axis=1))
-        # A tile with no valid column leaves m_new at -inf; -inf - -inf is NaN, so short-circuit
-        # both terms. Identical results whenever m_new is finite (alpha -> exp(m_i - m_new),
-        # masked-off p -> exp(-inf - finite) == 0.0), which is every non-degenerate query.
-        alpha = tl.where(m_new == -float("inf"), 1.0, tl.exp(m_i - m_new))
-        p = tl.where(valid[None, :], tl.exp(scores - m_new[:, None]), 0.0)
-        l_i = l_i * alpha + tl.sum(p, axis=1)
-        acc = acc * alpha[:, None] + tl.dot(p.to(kv.dtype), kv)
-        m_i = m_new
+        n_cmp_active = n_active - N_WINDOW
+        for t in range(0, tl.cdiv(n_cmp_active, BLOCK_T)):
+            rel_t = t * BLOCK_T + tl.arange(0, BLOCK_T)
+            offs_t = N_WINDOW + rel_t
+            t_mask = rel_t < n_cmp_active
+            idxs = tl.load(idx_base + offs_t * stride_it, mask=t_mask, other=-1)
+            valid = t_mask & (idxs >= 0)
+            safe_idxs = tl.where(valid, idxs, 0)
+            kv_ptrs = (
+                cmp_ptr
+                + safe_idxs[:, None] * stride_cn
+                + offs_d[None, :] * stride_cd
+            )
+            kv = tl.load(kv_ptrs, mask=valid[:, None], other=0.0).to(tl.float32)
+
+            scores = tl.dot(q, tl.trans(kv)) * scale
+            scores = tl.where(valid[None, :], scores, -float("inf"))
+            m_new = tl.maximum(m_i, tl.max(scores, axis=1))
+            alpha = tl.where(m_new == -float("inf"), 1.0, tl.exp(m_i - m_new))
+            p = tl.where(valid[None, :], tl.exp(scores - m_new[:, None]), 0.0)
+            l_i = l_i * alpha + tl.sum(p, axis=1)
+            acc = acc * alpha[:, None] + tl.dot(p.to(kv.dtype), kv)
+            m_i = m_new
+    else:
+        for t in range(0, tl.cdiv(n_active, BLOCK_T)):
+            offs_t = t * BLOCK_T + tl.arange(0, BLOCK_T)
+            t_mask = offs_t < n_active
+            idxs = tl.load(idx_base + offs_t * stride_it, mask=t_mask, other=-1)
+            valid = idxs >= 0
+            # Window-first partition: top-k column j < N_WINDOW reads window_pool, else cmp_pool.
+            # Both pools are contiguous [*, D] with identical strides (asserted in the wrapper),
+            # so select one base per column and issue a single gather load on CUDA.
+            is_win = offs_t < N_WINDOW
+            base = tl.where(is_win, win_ptr, cmp_ptr)
+            kv_ptrs = base[:, None] + idxs[:, None] * stride_wn + offs_d[None, :] * stride_wd
+            kv = tl.load(kv_ptrs, mask=valid[:, None], other=0.0).to(tl.float32)
+
+            scores = tl.dot(q, tl.trans(kv)) * scale
+            scores = tl.where(valid[None, :], scores, -float("inf"))
+
+            m_new = tl.maximum(m_i, tl.max(scores, axis=1))
+            # A tile with no valid column leaves m_new at -inf; avoid -inf - -inf producing NaN.
+            alpha = tl.where(m_new == -float("inf"), 1.0, tl.exp(m_i - m_new))
+            p = tl.where(valid[None, :], tl.exp(scores - m_new[:, None]), 0.0)
+            l_i = l_i * alpha + tl.sum(p, axis=1)
+            acc = acc * alpha[:, None] + tl.dot(p.to(kv.dtype), kv)
+            m_i = m_new
 
     sink = tl.load(sink_ptr + offs_h, mask=h_mask, other=0.0).to(tl.float32)
     l_i = l_i + tl.exp(sink - m_i)
@@ -176,25 +223,76 @@ def _sparse_attn_paged_splitk_kernel(
         q = tl.load(q_ptrs, mask=h_mask[:, None], other=0.0).to(tl.float32)
         idx_base = idx_ptr + pid_b * stride_ib + pid_m * stride_im
 
-        for start in range(split_start, split_end, BLOCK_T):
-            offs_t = start + tl.arange(0, BLOCK_T)
-            t_mask = offs_t < split_end
-            idxs = tl.load(idx_base + offs_t * stride_it, mask=t_mask, other=-1)
-            valid = idxs >= 0
-            is_win = offs_t < N_WINDOW
-            base = tl.where(is_win, win_ptr, cmp_ptr)
-            kv_ptrs = base[:, None] + idxs[:, None] * stride_wn + offs_d[None, :] * stride_wd
-            kv = tl.load(kv_ptrs, mask=valid[:, None], other=0.0).to(tl.float32)
+        if target_info.is_hip():
+            win_start = split_start
+            win_end = tl.minimum(split_end, N_WINDOW)
+            if win_end > win_start:
+                for start in range(win_start, win_end, BLOCK_T):
+                    offs_t = start + tl.arange(0, BLOCK_T)
+                    t_mask = offs_t < win_end
+                    idxs = tl.load(idx_base + offs_t * stride_it, mask=t_mask, other=-1)
+                    valid = t_mask & (idxs >= 0)
+                    safe_idxs = tl.where(valid, idxs, 0)
+                    kv_ptrs = (
+                        win_ptr
+                        + safe_idxs[:, None] * stride_wn
+                        + offs_d[None, :] * stride_wd
+                    )
+                    kv = tl.load(kv_ptrs, mask=valid[:, None], other=0.0).to(tl.float32)
 
-            scores = tl.dot(q, tl.trans(kv)) * scale
-            scores = tl.where(valid[None, :], scores, -float("inf"))
+                    scores = tl.dot(q, tl.trans(kv)) * scale
+                    scores = tl.where(valid[None, :], scores, -float("inf"))
+                    m_new = tl.maximum(m_i, tl.max(scores, axis=1))
+                    alpha = tl.where(m_new == -float("inf"), 1.0, tl.exp(m_i - m_new))
+                    p = tl.where(valid[None, :], tl.exp(scores - m_new[:, None]), 0.0)
+                    l_i = l_i * alpha + tl.sum(p, axis=1)
+                    acc = acc * alpha[:, None] + tl.dot(p.to(kv.dtype), kv)
+                    m_i = m_new
 
-            m_new = tl.maximum(m_i, tl.max(scores, axis=1))
-            alpha = tl.where(m_new == -float("inf"), 1.0, tl.exp(m_i - m_new))
-            p = tl.where(valid[None, :], tl.exp(scores - m_new[:, None]), 0.0)
-            l_i = l_i * alpha + tl.sum(p, axis=1)
-            acc = acc * alpha[:, None] + tl.dot(p.to(kv.dtype), kv)
-            m_i = m_new
+            cmp_start = tl.maximum(split_start, N_WINDOW)
+            cmp_end = split_end
+            if cmp_end > cmp_start:
+                for start in range(cmp_start, cmp_end, BLOCK_T):
+                    offs_t = start + tl.arange(0, BLOCK_T)
+                    t_mask = offs_t < cmp_end
+                    idxs = tl.load(idx_base + offs_t * stride_it, mask=t_mask, other=-1)
+                    valid = t_mask & (idxs >= 0)
+                    safe_idxs = tl.where(valid, idxs, 0)
+                    kv_ptrs = (
+                        cmp_ptr
+                        + safe_idxs[:, None] * stride_cn
+                        + offs_d[None, :] * stride_cd
+                    )
+                    kv = tl.load(kv_ptrs, mask=valid[:, None], other=0.0).to(tl.float32)
+
+                    scores = tl.dot(q, tl.trans(kv)) * scale
+                    scores = tl.where(valid[None, :], scores, -float("inf"))
+                    m_new = tl.maximum(m_i, tl.max(scores, axis=1))
+                    alpha = tl.where(m_new == -float("inf"), 1.0, tl.exp(m_i - m_new))
+                    p = tl.where(valid[None, :], tl.exp(scores - m_new[:, None]), 0.0)
+                    l_i = l_i * alpha + tl.sum(p, axis=1)
+                    acc = acc * alpha[:, None] + tl.dot(p.to(kv.dtype), kv)
+                    m_i = m_new
+        else:
+            for start in range(split_start, split_end, BLOCK_T):
+                offs_t = start + tl.arange(0, BLOCK_T)
+                t_mask = offs_t < split_end
+                idxs = tl.load(idx_base + offs_t * stride_it, mask=t_mask, other=-1)
+                valid = idxs >= 0
+                is_win = offs_t < N_WINDOW
+                base = tl.where(is_win, win_ptr, cmp_ptr)
+                kv_ptrs = base[:, None] + idxs[:, None] * stride_wn + offs_d[None, :] * stride_wd
+                kv = tl.load(kv_ptrs, mask=valid[:, None], other=0.0).to(tl.float32)
+
+                scores = tl.dot(q, tl.trans(kv)) * scale
+                scores = tl.where(valid[None, :], scores, -float("inf"))
+
+                m_new = tl.maximum(m_i, tl.max(scores, axis=1))
+                alpha = tl.where(m_new == -float("inf"), 1.0, tl.exp(m_i - m_new))
+                p = tl.where(valid[None, :], tl.exp(scores - m_new[:, None]), 0.0)
+                l_i = l_i * alpha + tl.sum(p, axis=1)
+                acc = acc * alpha[:, None] + tl.dot(p.to(kv.dtype), kv)
+                m_i = m_new
 
     # Normalized partial + its lse; an empty (or all-masked) split reports lse = -inf so the
     # merge's exp(lse - m) weight is exactly 0.
@@ -346,7 +444,7 @@ def sparse_attn_paged(
         BLOCK_T=BLOCK_T,
         HAS_COUNTS=has_counts,
         num_warps=8,
-        num_stages=2,
+        num_stages=1 if is_rocm() else 2,
     )
     return o
 
@@ -376,7 +474,7 @@ def _sparse_attn_paged_splitk(
         HAS_COUNTS=has_counts,
         NUM_SPLITS=n_splits,
         num_warps=8,
-        num_stages=2,
+        num_stages=1 if is_rocm() else 2,
     )
     _sparse_attn_splitk_merge_kernel[(m, b, h)](
         mid_o, mid_lse, o, sink,

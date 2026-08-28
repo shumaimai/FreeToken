@@ -315,7 +315,10 @@ def test_decode_triton_attention_matches_reference(
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="Triton attention needs CUDA")
-@pytest.mark.parametrize(("num_q_heads", "num_kv_heads"), [(24, 4), (20, 4), (28, 4)])
+@pytest.mark.parametrize(
+    ("num_q_heads", "num_kv_heads"),
+    [(24, 4), (20, 4), (28, 4), (48, 2)],
+)
 def test_decode_triton_attention_non_pow2_group(num_q_heads: int, num_kv_heads: int):
     """GQA groups that are not a power of two (e.g. Qwen3.6-27B's 24/4 == 6). The grouped
     decode tiles the head axis to a power of two (tl.arange constraint) and masks the extra
@@ -419,6 +422,112 @@ def test_decode_triton_attention_with_sinks_matches_reference():
     )
 
     torch.testing.assert_close(actual.float(), expected.float(), atol=2e-2, rtol=2e-2)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Triton attention needs CUDA")
+@pytest.mark.parametrize("seq_len", [128, 4096])
+def test_decode_triton_attention_16_split_capacity_matches_reference(seq_len: int):
+    from freetoken.kernel.triton.attention import decode_paged_attention
+
+    torch.manual_seed(13)
+    device = torch.device("cuda")
+    q_heads, kv_heads, head_dim, max_splits = 14, 2, 64, 16
+    q = torch.randn(1, q_heads, head_dim, device=device, dtype=torch.bfloat16)
+    k = torch.randn(seq_len, kv_heads, head_dim, device=device, dtype=torch.bfloat16)
+    v = torch.randn_like(k)
+    indptr = torch.tensor([0, seq_len], dtype=torch.int32, device=device)
+    indices = torch.arange(seq_len, dtype=torch.int32, device=device)
+    positions = torch.tensor([seq_len - 1], dtype=torch.int64, device=device)
+    q_to_req = torch.zeros(1, dtype=torch.int32, device=device)
+    mid_o = torch.empty(
+        1, q_heads, max_splits, head_dim, dtype=torch.float32, device=device
+    )
+    mid_lse = torch.empty(1, q_heads, max_splits, dtype=torch.float32, device=device)
+    splits = torch.full((1,), max_splits, dtype=torch.int32, device=device)
+
+    actual = decode_paged_attention(
+        q, k, v, indptr, indices, positions, mid_o, mid_lse, splits,
+        max_splits, head_dim ** -0.5,
+    )
+    expected = _reference_paged_attention(
+        q, k, v, indptr, indices, q_to_req, positions, head_dim ** -0.5, None,
+    )
+
+    torch.testing.assert_close(actual.float(), expected.float(), atol=2e-2, rtol=2e-2)
+
+
+@pytest.mark.parametrize(
+    ("batch", "q_heads", "kv_heads", "head_dim", "expected"),
+    [
+        (1, 16, 2, 256, (256, 4)),
+        (1, 32, 8, 128, (2048, 8)),
+        (2, 16, 2, 256, (2048, 8)),
+        (4, 16, 2, 256, (8192, 8)),
+    ],
+)
+def test_gfx1101_decode_split_policy(batch, q_heads, kv_heads, head_dim, expected):
+    from freetoken.kernel.triton.attention import _gfx1101_decode_split_policy
+
+    assert _gfx1101_decode_split_policy(
+        batch, q_heads, kv_heads, head_dim
+    ) == expected
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Triton attention needs CUDA")
+def test_decode_triton_attention_gfx1101_graph_replay_changes_active_splits():
+    from freetoken.kernel.triton.attention import decode_paged_attention
+    from freetoken.utils.arch import get_rocm_gfx_arch
+
+    if get_rocm_gfx_arch() != "gfx1101":
+        pytest.skip("requires the gfx1101 adaptive split policy")
+
+    torch.manual_seed(14)
+    device = torch.device("cuda")
+    q_heads, kv_heads, head_dim, max_splits, max_len = 32, 8, 128, 16, 4096
+    q = torch.randn(1, q_heads, head_dim, device=device, dtype=torch.bfloat16)
+    k = torch.randn(max_len, kv_heads, head_dim, device=device, dtype=torch.bfloat16)
+    v = torch.randn_like(k)
+    indptr = torch.tensor([0, max_len], dtype=torch.int32, device=device)
+    indices = torch.arange(max_len, dtype=torch.int32, device=device)
+    positions = torch.tensor([max_len - 1], dtype=torch.int64, device=device)
+    q_to_req = torch.zeros(1, dtype=torch.int32, device=device)
+    mid_o = torch.empty(
+        1, q_heads, max_splits, head_dim, dtype=torch.float32, device=device
+    )
+    mid_lse = torch.empty(1, q_heads, max_splits, dtype=torch.float32, device=device)
+    splits = torch.full((1,), max_splits, dtype=torch.int32, device=device)
+    out = torch.empty_like(q)
+
+    def call():
+        return decode_paged_attention(
+            q, k, v, indptr, indices, positions, mid_o, mid_lse, splits,
+            max_splits, head_dim ** -0.5, out=out,
+        )
+
+    side = torch.cuda.Stream()
+    side.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(side):
+        for _ in range(3):
+            call()
+    torch.cuda.current_stream().wait_stream(side)
+
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        call()
+
+    short_len = 128
+    indptr[1].fill_(short_len)
+    positions.fill_(short_len - 1)
+    mid_o[:, :, 8:].fill_(float("nan"))
+    mid_lse[:, :, 8:].fill_(float("nan"))
+    graph.replay()
+    torch.cuda.synchronize()
+
+    expected = _reference_paged_attention(
+        q, k, v, indptr, indices, q_to_req, positions, head_dim ** -0.5, None,
+    )
+    assert torch.isfinite(out).all()
+    torch.testing.assert_close(out.float(), expected.float(), atol=2e-2, rtol=2e-2)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="Triton attention needs CUDA")

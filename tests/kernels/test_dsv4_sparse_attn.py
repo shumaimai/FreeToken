@@ -186,3 +186,28 @@ def test_cuda_graph_follows_counts(pools, m):
         torch.cuda.synchronize()
         ref = _reference(q, win, cmp, sink, idx, N_WINDOW, scale, counts)
         torch.testing.assert_close(out.float(), ref, **TOL)
+
+
+@pytest.mark.parametrize("m", MS)
+def test_production_shape_matches_reference(m):
+    """DeepSeek-V4's real D/H/window/top-k shape must fit consumer RDNA3 LDS."""
+    d, h, n_window, n_cmp = 512, 64, 128, 512
+    g = torch.Generator(device="cuda").manual_seed(21)
+    q = torch.randn(1, m, h, d, device="cuda", dtype=torch.bfloat16, generator=g)
+    win = torch.randn(256, d, device="cuda", dtype=torch.bfloat16, generator=g)
+    cmp = torch.randn(1024, d, device="cuda", dtype=torch.bfloat16, generator=g)
+    sink = torch.randn(h, device="cuda", dtype=torch.float32, generator=g)
+    idx = torch.empty((1, m, n_window + n_cmp), dtype=torch.int32, device="cuda")
+    idx[..., :n_window] = torch.randint(
+        0, win.shape[0], (1, m, n_window), device="cuda", dtype=torch.int32, generator=g
+    )
+    idx[..., n_window:] = torch.randint(
+        0, cmp.shape[0], (1, m, n_cmp), device="cuda", dtype=torch.int32, generator=g
+    )
+    counts = torch.full((1, m), n_cmp, dtype=torch.int32, device="cuda")
+    scale = d ** -0.5
+
+    got = sparse_attn_paged(q, win, cmp, sink, idx, n_window, scale, cmp_counts=counts)
+    ref = _reference(q, win, cmp, sink, idx, n_window, scale, counts)
+
+    torch.testing.assert_close(got.float(), ref, **TOL)

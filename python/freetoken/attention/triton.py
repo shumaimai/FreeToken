@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, List
 
 import torch
 from freetoken.core import Batch, get_global_ctx
+from freetoken.utils.arch import get_rocm_gfx_arch
 
 from .base import AttentionSpec, BaseAttnBackend, BaseAttnMetadata
 from .utils import BaseCaptureData
@@ -87,7 +88,10 @@ class TritonAttentionBackend(BaseAttnBackend):
         self.capture: TritonCaptureData | None = None
         self.capture_bs: List[int] = []
         self.max_graph_bs = 0
-        self.max_kv_splits = 8
+        # gfx1101 needs a second split-K wave to fill its 60 RDNA3 CUs at long context.
+        # The kernel keeps short contexts at eight active splits while retaining a static
+        # 16-slot scratch/grid for graph replay.
+        self.max_kv_splits = 16 if get_rocm_gfx_arch() == "gfx1101" else 8
         self.prefill_tile_min_q = 128
         self.num_q_heads = int(getattr(config, "num_qo_heads", 1))
         kv_groups = getattr(config, "kv_cache_group_specs", lambda: ())()
