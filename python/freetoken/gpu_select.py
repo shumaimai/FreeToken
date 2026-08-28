@@ -16,10 +16,40 @@ Stdlib only (torch is imported lazily); not under freetoken.utils, which imports
 from __future__ import annotations
 
 import argparse
+import ast
+import importlib.metadata
 import os
+import re
 from typing import Sequence
 
 UUID_PREFIX = "GPU-"
+
+
+def _torch_build_is_rocm() -> bool:
+    """Inspect the installed Torch metadata without importing Torch.
+
+    ``gpu_select`` is used by the torch-free daemon control plane, so importing
+    ``torch.version`` here would initialize a heavyweight accelerator package in
+    the daemon. ROCm wheels normally carry ``+rocm`` in their distribution version;
+    parsing the generated version.py covers vendor wheels whose metadata omits it.
+    """
+    try:
+        dist = importlib.metadata.distribution("torch")
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    if "rocm" in dist.version.lower():
+        return True
+    try:
+        text = dist.locate_file("torch/version.py").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    match = re.search(r"^hip(?:\s*:[^=]+)?\s*=\s*(.+)$", text, re.MULTILINE)
+    if match is None:
+        return False
+    try:
+        return ast.literal_eval(match.group(1)) is not None
+    except (SyntaxError, ValueError):
+        return False
 
 
 def is_gpu_uuid(spec: str) -> bool:
@@ -133,6 +163,12 @@ def resolve_gpu_uuids(specs: Sequence[str]) -> "tuple[str, ...] | None":
     specs = parse_gpu_spec(",".join(specs))
     if len({s.upper() for s in specs}) != len(specs):
         raise ValueError(f"--gpu {','.join(specs)}: the same GPU appears twice")
+    # A mixed AMD/NVIDIA host can expose NVML even though this process runs a ROCm
+    # Torch build. Numeric ROCm selectors are visible HIP ordinals, not NVIDIA
+    # physical indices, so preserve them for bind_assigned_gpu instead of consulting NVML.
+    if _torch_build_is_rocm():
+        return None
+
     uuids = _nvml_uuids()
     if uuids is None:
         return None

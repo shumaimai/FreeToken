@@ -1,9 +1,12 @@
 import importlib
+import os
 import pathlib
 from types import SimpleNamespace
 
+import pytest
 import torch
 
+import freetoken
 from freetoken.utils import arch
 
 
@@ -11,6 +14,31 @@ def _clear_arch_caches() -> None:
     arch.get_rocm_gfx_arch.cache_clear()
     arch.is_gfx11xx_family.cache_clear()
     arch.is_gfx12xx_family.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "runtime_path",
+    [
+        "/opt/rocm/lib/librocdxg.so",
+        "/usr/lib/librocdxg.so",
+        "/usr/lib/x86_64-linux-gnu/librocdxg.so",
+    ],
+)
+def test_wsl_rocdxg_detection_sets_legacy_hsa_switch(monkeypatch, runtime_path):
+    monkeypatch.delenv("HSA_ENABLE_DXG_DETECTION", raising=False)
+    present = {"/dev/dxg", runtime_path}
+    monkeypatch.setattr(os.path, "exists", lambda path: path in present)
+
+    assert freetoken._configure_wsl_rocdxg()
+    assert os.environ["HSA_ENABLE_DXG_DETECTION"] == "1"
+
+
+def test_wsl_rocdxg_detection_respects_explicit_setting(monkeypatch):
+    monkeypatch.setenv("HSA_ENABLE_DXG_DETECTION", "0")
+    monkeypatch.setattr(os.path, "exists", lambda _path: True)
+
+    assert not freetoken._configure_wsl_rocdxg()
+    assert os.environ["HSA_ENABLE_DXG_DETECTION"] == "0"
 
 
 def test_rocm_arch_prefers_visible_device_over_multi_arch_build_env(monkeypatch):
@@ -89,3 +117,16 @@ def test_rocm_link_flags_support_versioned_modular_sdk(monkeypatch, tmp_path):
     assert compat_link.resolve() == versioned_runtime.resolve()
 
     utils._rocm_link_flags.cache_clear()
+
+
+def test_rocm_gpu_ordinal_bypasses_nvml(monkeypatch):
+    from freetoken import gpu_select
+
+    monkeypatch.setattr(gpu_select, "_torch_build_is_rocm", lambda: True)
+    monkeypatch.setattr(
+        gpu_select,
+        "_nvml_uuids",
+        lambda: (_ for _ in ()).throw(AssertionError("ROCm must not query NVML")),
+    )
+
+    assert gpu_select.resolve_gpu_uuids(["0"]) is None

@@ -147,7 +147,7 @@ def launch_server(
             raise SystemExit(f"{prog or 'ft serve'}: error: {exc}") from exc
         logger.info(
             f"--gpu {','.join(server_args.gpu)} -> "
-            f"{', '.join(server_args.gpu_assigned) if server_args.gpu_assigned else 'resolved at CUDA init (no NVML)'}"
+            f"{', '.join(server_args.gpu_assigned) if server_args.gpu_assigned else 'resolved at accelerator init'}"
         )
 
     def start_subprocess() -> "BackendHandle":
