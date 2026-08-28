@@ -25,6 +25,10 @@ _MODEL_REGISTRY: dict[str, ModelSpec] = {
         "freetoken.models.qwen2",
         "Qwen2ForCausalLM",
     ),
+    "Qwen2MoeForCausalLM": ModelSpec(
+        "freetoken.models.qwen2_moe",
+        "Qwen2MoeForCausalLM",
+    ),
     "Qwen3ForCausalLM": ModelSpec(
         "freetoken.models.qwen3",
         "Qwen3ForCausalLM",

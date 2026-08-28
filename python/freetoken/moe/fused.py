@@ -35,6 +35,37 @@ def _torch_fused_topk(
     return topk_weights.contiguous(), topk_ids.contiguous()
 
 
+def _triton_fused_topk(
+    gating_output: torch.Tensor,
+    topk: int,
+    renormalize: bool,
+    num_token_non_padded: torch.Tensor | None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    from freetoken.kernel.triton.fused_moe import fused_topk_softmax_kernel
+
+    logits = gating_output.contiguous()
+    tokens, experts = logits.shape
+    weights = torch.empty((tokens, topk), dtype=torch.float32, device=logits.device)
+    ids = torch.empty((tokens, topk), dtype=torch.int32, device=logits.device)
+    if tokens == 0:
+        return weights, ids
+    limit_arg = num_token_non_padded if num_token_non_padded is not None else logits
+    fused_topk_softmax_kernel[(tokens,)](
+        logits,
+        weights,
+        ids,
+        limit_arg,
+        logits.stride(0),
+        E=experts,
+        K=topk,
+        BLOCK_E=max(2, 1 << (experts - 1).bit_length()),
+        RENORMALIZE=renormalize,
+        HAS_TOKEN_LIMIT=num_token_non_padded is not None,
+        num_warps=1,
+    )
+    return weights, ids
+
+
 def fused_topk(
     hidden_states: torch.Tensor,
     gating_output: torch.Tensor,
@@ -44,23 +75,24 @@ def fused_topk(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     assert hidden_states.shape[0] == gating_output.shape[0], "Number of tokens mismatch"
 
-    from freetoken.kernel.backend import is_triton_kernels_installed
+    from freetoken.kernel.backend import is_rocm, is_triton_kernels_installed
 
     # triton_kernels ships no Windows wheel, and unlike flashinfer/sgl_kernel it is not one
     # of the six ops the in-repo triton kernels cover -- so this router needs its own fallback.
     if not is_triton_kernels_installed():
+        if is_rocm() and gating_output.is_cuda and gating_output.shape[-1] <= 1024:
+            return _triton_fused_topk(
+                gating_output, topk, renormalize, num_token_non_padded
+            )
         global _warned_torch_topk
         if not _warned_torch_topk:
             _warned_torch_topk = True
-            # Once, not per call: this runs every MoE forward. On Linux a missing
-            # triton_kernels used to fail fast with ImportError; keep the misconfiguration
-            # visible without giving up the fallback that Windows needs.
             logger.warning_rank0(
-                "fused_topk: triton_kernels is not installed -> pure-torch router fallback "
-                "(numerically equivalent, slower). Expected on Windows (no wheel); on Linux "
-                "install triton_kernels to restore the fused router."
+                "fused_topk: triton_kernels is not installed -> pure-torch router fallback"
             )
-        return _torch_fused_topk(gating_output, topk, renormalize, num_token_non_padded)
+        return _torch_fused_topk(
+            gating_output, topk, renormalize, num_token_non_padded
+        )
 
     from triton_kernels.topk import topk as triton_kernels_topk
 

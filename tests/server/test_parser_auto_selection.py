@@ -34,6 +34,7 @@ NO_REASONING_FORMAT = {
     "MistralForCausalLM",
     "Mistral3ForConditionalGeneration",
     "Qwen2ForCausalLM",
+    "Qwen2MoeForCausalLM",
 }
 
 # `llama3` is the end of the cascade -- the answer when nothing matched.

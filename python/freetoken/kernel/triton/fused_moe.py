@@ -3,6 +3,67 @@ import triton.language as tl
 
 
 @triton.jit
+def fused_topk_softmax_kernel(
+    logits_ptr,
+    weights_ptr,
+    ids_ptr,
+    num_token_non_padded_ptr,
+    stride_logits_t,
+    E: tl.constexpr,
+    K: tl.constexpr,
+    BLOCK_E: tl.constexpr,
+    RENORMALIZE: tl.constexpr,
+    HAS_TOKEN_LIMIT: tl.constexpr,
+):
+    """One-program router: full-expert softmax, top-k, optional top-k renormalization."""
+    token_id = tl.program_id(0)
+    offs_e = tl.arange(0, BLOCK_E)
+    valid = offs_e < E
+    active = True
+    if HAS_TOKEN_LIMIT:
+        active = token_id < tl.load(num_token_non_padded_ptr)
+
+    logits = tl.load(
+        logits_ptr + token_id * stride_logits_t + offs_e,
+        mask=valid & active,
+        other=-float("inf"),
+    ).to(tl.float32)
+
+    # Sort a monotonic float key packed with the expert id so values and ids move together.
+    min_i32 = -2147483648
+    bits = logits.to(tl.int32, bitcast=True)
+    sign = bits >> 31
+    key = tl.where(sign == 0, bits ^ -1, bits ^ min_i32)
+    key = tl.where(valid & active, key, 0x7FFFFFFF)
+    packed = ((key.to(tl.int64) & 0xFFFFFFFF) << 32) | offs_e.to(tl.int64)
+    sorted_packed = tl.sort(packed, descending=False)
+    sorted_key = ((sorted_packed >> 32) & 0xFFFFFFFF).to(tl.int32)
+    sorted_ids = (sorted_packed & 0xFFFFFFFF).to(tl.int32)
+    sorted_sign = sorted_key >> 31
+    sorted_bits = tl.where(sorted_sign < 0, sorted_key ^ -1, sorted_key ^ min_i32)
+    sorted_logits = sorted_bits.to(tl.float32, bitcast=True)
+
+    sorted_valid = offs_e < E
+    max_logit = tl.max(tl.where(sorted_valid, sorted_logits, -float("inf")), axis=0)
+    exp_logits = tl.where(sorted_valid, tl.exp(sorted_logits - max_logit), 0.0)
+    if RENORMALIZE:
+        denominator = tl.sum(tl.where(offs_e < K, exp_logits, 0.0), axis=0)
+    else:
+        denominator = tl.sum(exp_logits, axis=0)
+    top_weights = exp_logits / tl.where(denominator > 0.0, denominator, 1.0)
+
+    out_offsets = token_id * K + offs_e
+    top_mask = (offs_e < K) & active
+    tl.store(weights_ptr + out_offsets, top_weights, mask=top_mask)
+    tl.store(ids_ptr + out_offsets, sorted_ids, mask=top_mask)
+
+    if HAS_TOKEN_LIMIT:
+        inactive_mask = (offs_e < K) & ~active
+        tl.store(weights_ptr + out_offsets, 0.0, mask=inactive_mask)
+        tl.store(ids_ptr + out_offsets, -1, mask=inactive_mask)
+
+
+@triton.jit
 def moe_align_block_size_init_kernel(
     sorted_token_ids_ptr,
     expert_ids_ptr,
