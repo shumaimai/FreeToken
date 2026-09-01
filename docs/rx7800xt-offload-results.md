@@ -1,4 +1,7 @@
-# RX 7800 XT unquantized offload results
+# RX 7800 XT unquantized offload results (ROCm 7.2.4 historical baseline)
+
+For the current ROCm 10 stack and resident GPT-OSS measurement, see
+[`rx7800xt-rocm10-results.md`](rx7800xt-rocm10-results.md).
 
 Hardware and runtime:
 

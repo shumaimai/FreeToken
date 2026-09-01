@@ -14,9 +14,10 @@
 > This is an unofficial experimental ROCm fork of
 > [FlashML-org/FreeToken](https://github.com/FlashML-org/FreeToken), focused on
 > AMD RDNA3/RDNA4 source builds and tested primarily on an RX 7800 XT under
-> WSL2. It is not an official FlashML release. See
+> WSL2. The current validated stack is ROCm 10.0.0, PyTorch 2.13, and AMD
+> Triton 3.8. It is not an official FlashML release. See
 > [the ROCm installation notes](docs/install.md) and
-> [RX 7800 XT measurements](docs/rx7800xt-offload-results.md).
+> [ROCm 10 RX 7800 XT measurements](docs/rx7800xt-rocm10-results.md).
 
 
 Unlock datacenter-class intelligence on the hardware you already own — Run 290B+ frontier MoE models locally on your gaming PC at blistering interactive speeds.
@@ -43,18 +44,13 @@ Download FreeToken for Windows or Linux at [flashml.ai](https://www.flashml.ai/)
 
 ### CLI
 
-Install FreeToken with [uv](https://docs.astral.sh/uv/) (recommended) or pip:
-
-```bash
-uv pip install "freetoken[accel]"
-```
-
-Or build from source:
+This fork is not published as a wheel. Build it from source after installing
+the ROCm 10 PyTorch/Triton stack described in [docs/install.md](docs/install.md):
 
 ```bash
 git clone https://github.com/shumaimai/FreeToken.git && cd FreeToken
-uv venv && source .venv/bin/activate
-uv pip install -e ".[accel]"
+source ~/.venv-freetoken-rocm10/bin/activate
+python -m pip install --no-build-isolation -e .
 ```
 
 For More details:
@@ -63,6 +59,7 @@ For More details:
 - [Quick start](docs/quickstart.md)
 - [Supported models](docs/models.md)
 - [CLI reference](docs/cli.md)
+- [ROCm 10 RX 7800 XT results](docs/rx7800xt-rocm10-results.md)
 - [External llama.cpp RX 7800 XT experiments](docs/rx7800xt-llama-cpp-results.md)
 
 ## Citation

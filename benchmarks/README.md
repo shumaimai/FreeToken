@@ -3,12 +3,13 @@
 Run from the repo root with `PYTHONPATH=python:.`, pinned to one GPU
 (`CUDA_VISIBLE_DEVICES=0`). Each script's `--help` / docstring has the details.
 
-**`bench_decode_moe.py`** — bs=1 decode tok/s of a served MoE model. Spawns `ft serve`
-per backend and times token arrivals over streamed `/v1/chat/completions`, so numbers
-include the full serving path. AIME-25 prompt, checkpoint-recommended sampling.
+**`bench_decode_moe.py`** — bs=1 visible decode-event rate of a served MoE model. Spawns `ft serve`
+per backend and times visible text deltas over streamed `/v1/chat/completions`, so
+numbers include the full serving path but are event rates rather than exact token/s.
+AIME-25 prompt, checkpoint-recommended sampling.
 
 ```bash
-python benchmarks/bench_decode_moe.py --model /path/to/model --backend offload,cpu,hybrid
+python benchmarks/bench_decode_moe.py --model /path/to/model --backend fused,offload,cpu,hybrid
 ```
 
 **`bench_load_weight_generic.py`** — expert-bank load time: serial vs parallel O_DIRECT

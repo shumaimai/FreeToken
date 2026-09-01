@@ -42,13 +42,18 @@ If you want to implement something on the [Roadmap](https://github.com/FlashML-o
 ## Development setup
 
 ```bash
-git clone https://github.com/FlashML-org/FreeToken.git && cd FreeToken
-uv pip install -e ".[accel]"
+git clone https://github.com/shumaimai/FreeToken.git && cd FreeToken
+source ~/.venv-freetoken-rocm10/bin/activate  # created by docs/install.md
+python -m pip install --no-build-isolation -e .
 ```
 
-See [docs/install.md](docs/install.md) for requirements. CUDA kernels are JIT-compiled on first use and need a CUDA 13 toolkit with `nvcc` on `PATH`.
+First follow [docs/install.md](docs/install.md) to install the validated ROCm 10
+Torch/Triton stack and build tools. HIP
+kernels are JIT-compiled for the visible GPU on first use.
 
-Run the tests with `pytest`. Most tests need an NVIDIA GPU. `-m "not slow"` skips the long kernel sweeps; tests marked `needs_weights` are off unless you point them at a local checkpoint (see [tests/README.md](tests/README.md)).
+Run the tests with `pytest`. GPU tests use PyTorch's `cuda` API namespace on
+both CUDA and HIP. `-m "not slow"` skips long kernel sweeps; tests marked
+`needs_weights` are off unless you point them at a local checkpoint.
 
 ## Commit messages
 

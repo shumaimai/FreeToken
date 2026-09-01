@@ -1,0 +1,77 @@
+{
+  "stack": {
+    "rocm_package": "10.0.0",
+    "hip_abi": "7.15.26333",
+    "torch": "2.13.0+rocm10.0.0",
+    "triton": "3.8.0+git4cff872c.rocm10.0.0",
+    "os": "Ubuntu 24.04 WSL2"
+  },
+  "hardware": {
+    "gpu": "AMD Radeon RX 7800 XT",
+    "gpu_arch": "gfx1101",
+    "cpu": "AMD Ryzen 7 5800X3D",
+    "physical_ram_gib": 32,
+    "wsl_ram_gib": 29,
+    "wsl_swap_gib": 16
+  },
+  "tests": {
+    "core": {"passed": 1084, "skipped": 4},
+    "kernels": {"passed": 214, "skipped": 20},
+    "moe": {"passed": 109, "skipped": 12},
+    "total": {"passed": 1407, "skipped": 36}
+  },
+  "kernel_benchmarks": {
+    "attention_decode_128_d256": {
+      "old_policy_us": 29.06,
+      "rocm10_policy_us": 15.66
+    },
+    "gpt_oss_mxfp4_production_decode": {
+      "old_geometry_us": 107.13,
+      "rocm10_geometry_us": 94.082
+    },
+    "dsv4_pipeline": {
+      "one_stage_us": 167.708,
+      "two_stage_us": 194.389,
+      "selected_stages": 1
+    },
+    "dsv4_pool_gather": {
+      "split_loops_us": 165.052,
+      "unified_loop_us": 192.115,
+      "selected": "split_loops"
+    }
+  },
+  "bandwidth": {
+    "cpu_stream_read_gbs": 23.89,
+    "pcie_h2d_gbs": 24.62,
+    "pcie_d2h_gbs": 22.9,
+    "bf16": {"cpu_moe_gbs": 22.5, "pcie_gather_gbs": 20.2, "backend": "offload"},
+    "mxfp4": {"cpu_moe_gbs": 20.9, "pcie_gather_gbs": 20.2, "backend": "offload"}
+  },
+  "gpt_oss_20b": {
+    "method": "OpenAI-compatible streaming chat completions, greedy, single stream",
+    "prompt_tokens": 96,
+    "completion_tokens": 127,
+    "hipblaslt_default": {
+      "visible_events": 124,
+      "visible_intervals": 123,
+      "measured_window_s": 1.528909054,
+      "visible_event_s": 80.4495203153,
+      "visible_ttft_ms": 128.47488,
+      "vram_gib": 13.65625,
+      "output_sha1": "5f2f92156c65"
+    },
+    "hipblaslt_forced": {
+      "visible_events": 124,
+      "visible_intervals": 123,
+      "measured_window_s": 1.563043387,
+      "visible_event_s": 78.6926332454,
+      "visible_ttft_ms": 218.177309,
+      "vram_gib": 13.890625,
+      "output_sha1": "5f2f92156c65"
+    }
+  },
+  "safety": {
+    "qwen15_offload_completed": false,
+    "observation": "Host-memory pressure restarted Docker Desktop indirectly; the launch profile now requires an explicit override while containers run."
+  }
+}

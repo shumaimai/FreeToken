@@ -6,7 +6,7 @@ if [[ $# -gt 0 ]]; then
   shift
 fi
 
-python_bin="${FREETOKEN_PYTHON:-$HOME/.venv-freetoken-rocm/bin/python}"
+python_bin="${FREETOKEN_PYTHON:-$HOME/.venv-freetoken-rocm10/bin/python}"
 if [[ ! -x "$python_bin" ]]; then
   echo "FreeToken ROCm Python not found: $python_bin" >&2
   exit 1
@@ -19,8 +19,9 @@ fi
 export PYTORCH_ROCM_ARCH=gfx1101
 export FREETOKEN_ROCM_ARCH=gfx1101
 export TVM_FFI_ROCM_ARCH_LIST=gfx1101
-export TORCH_EXTENSIONS_DIR="${TORCH_EXTENSIONS_DIR:-$HOME/.cache/freetoken/torch-ext-gfx1101}"
-export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-$HOME/.cache/freetoken/triton-gfx1101}"
+export HSA_ENABLE_DXG_DETECTION="${HSA_ENABLE_DXG_DETECTION:-1}"
+export TORCH_EXTENSIONS_DIR="${TORCH_EXTENSIONS_DIR:-$HOME/.cache/freetoken/torch-ext-rocm10-gfx1101}"
+export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-$HOME/.cache/freetoken/triton-rocm10-gfx1101}"
 
 exec "$python_bin" -m freetoken.cli serve \
   --model "$model" \

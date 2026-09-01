@@ -5,17 +5,13 @@ sends a warmed chat request over /v1/chat/completions with ``stream=true``, and
 timestamps every SSE event as it arrives. Numbers therefore include the scheduler,
 detokenizer, and HTTP/SSE hop -- what a client actually sees -- not bare engine forwards.
 
-Method -- at bs=1 the server emits one delta event per decode step, and the final chunk
-(``stream_options.include_usage``) reports exact token counts, so
-
-    decode_tok_s = (completion_tokens - 1) / (t_last_event - t_first_event)
-
-which stays correct even when the detokenizer coalesces a few tokens into one event
-(multibyte characters): the window is still anchored on the first and last token's
-arrival. ``ignore_eos`` keeps the step count at exactly ``D`` regardless of sampling.
-TTFT is the measured run's warm first-token latency (template rendering + prefill
-included). Engine-internal diagnostics (expert-cache miss rate, hybrid fetch split) are
-not exposed over the API and are not reported; VRAM is the server's live /v1/stats figure.
+Method -- timestamps are attached to non-empty visible SSE text deltas. The
+detokenizer can hold or coalesce tokens, so this measures visible event rate,
+not exact token/s. API usage still records the completion-token count.
+``ignore_eos`` keeps the requested decode budget stable across runs. TTFT is
+time to the first visible text delta (template rendering + prefill + any
+detokenizer holdback). Engine-internal diagnostics are not exposed over the
+API and are not reported; VRAM is the server's live /v1/stats figure.
 
 Prompt: an AIME-25 problem sent as a chat message with thinking enabled -- a real
 reasoning workload, so expert routing is representative. The server renders the chat
@@ -37,8 +33,8 @@ Run (one backend):
     CUDA_VISIBLE_DEVICES=0 PYTHONPATH=python python benchmarks/bench_decode_moe.py \
         --model /path/to/model
 
-Run (all three backends, one server per backend):
-    ... --model /path/to/model --backend offload,cpu,hybrid --json out.json
+Run (multiple backends, one server per backend):
+    ... --model /path/to/model --backend fused,offload,cpu,hybrid --json out.json
 """
 
 from __future__ import annotations
@@ -77,7 +73,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--backend",
         default="offload",
-        help="comma list of offload|cpu|hybrid; one server per backend",
+        help="comma list of fused|offload|cpu|hybrid; one server per backend",
     )
     p.add_argument(
         "--aime",
@@ -251,7 +247,7 @@ def stop_server(proc: subprocess.Popen) -> None:
 
 def stream_generate(origin: str, model_id: str, problem: str, sampling: dict,
                     args: argparse.Namespace) -> dict:
-    """One streamed chat completion; returns per-token arrival stamps, text, and usage."""
+    """One streamed chat completion; returns visible-delta stamps, text, and usage."""
     body = {
         "model": model_id,
         "messages": [{"role": "user", "content": problem}],
@@ -344,7 +340,7 @@ def run_one(args: argparse.Namespace, backend: str) -> dict:
     completion = usage["completion_tokens"]
     if completion != args.decode:
         print(f"[bench] WARNING: completion_tokens={completion} != --decode {args.decode}", flush=True)
-    steps = completion - 1
+    visible_intervals = len(stamps) - 1
     decode_time = stamps[-1] - stamps[0]
     gaps = sorted((b - a) * 1e3 for a, b in zip(stamps, stamps[1:]))
     row = {
@@ -352,13 +348,16 @@ def run_one(args: argparse.Namespace, backend: str) -> dict:
         "backend": backend,
         "problem": args.problem,
         "prompt_tokens": usage["prompt_tokens"],
-        "decode_steps": steps,
-        "decode_tok_s": steps / decode_time if decode_time > 0 else 0.0,
-        "ms_per_token": decode_time / steps * 1e3 if steps > 0 else 0.0,
+        "visible_intervals": visible_intervals,
+        "visible_event_s": visible_intervals / decode_time if decode_time > 0 else 0.0,
+        "ms_per_visible_event": (
+            decode_time / visible_intervals * 1e3 if visible_intervals > 0 else 0.0
+        ),
         "event_ms_p50": gaps[len(gaps) // 2],
         "event_ms_p99": gaps[min(len(gaps) - 1, int(len(gaps) * 0.99))],
-        "ttft_ms": (stamps[0] - r["t0"]) * 1e3,
-        "events": len(stamps),
+        "visible_ttft_ms": (stamps[0] - r["t0"]) * 1e3,
+        "visible_events": len(stamps),
+        "measured_window_s": decode_time,
         "completion_tokens": completion,
         "vram_gib": stats.get("vram_bytes", 0) / 2**30,
         "sampling": sampling,
@@ -367,9 +366,11 @@ def run_one(args: argparse.Namespace, backend: str) -> dict:
     }
 
     print(f"\n==== decode bs=1 [{backend}] via /v1/chat/completions ====", flush=True)
-    print(f"  decode throughput : {row['decode_tok_s']:8.2f} tok/s  ({row['ms_per_token']:.3f} ms/token)")
-    print(f"  TTFT (warm)       : {row['ttft_ms']:8.1f} ms  (prompt {row['prompt_tokens']} tok)")
-    print(f"  decode measured   : {steps} steps in {decode_time:.3f} s  "
+    print(f"  visible event rate: {row['visible_event_s']:8.2f} event/s  "
+          f"({row['ms_per_visible_event']:.3f} ms/event)")
+    print(f"  first visible text: {row['visible_ttft_ms']:8.1f} ms  "
+          f"(prompt {row['prompt_tokens']} tok)")
+    print(f"  decode measured   : {visible_intervals} visible intervals in {decode_time:.3f} s  "
           f"(event p50 {row['event_ms_p50']:.3f} / p99 {row['event_ms_p99']:.3f} ms, "
           f"{len(stamps)} events)")
     print(f"  vram (server)     : {row['vram_gib']:8.2f} GiB")
@@ -382,7 +383,7 @@ def run_one(args: argparse.Namespace, backend: str) -> dict:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     backends = [b.strip() for b in args.backend.split(",") if b.strip()]
-    unknown = [b for b in backends if b not in ("offload", "cpu", "hybrid")]
+    unknown = [b for b in backends if b not in ("fused", "offload", "cpu", "hybrid")]
     if unknown:
         sys.exit(f"unknown backend(s): {unknown}")
 
