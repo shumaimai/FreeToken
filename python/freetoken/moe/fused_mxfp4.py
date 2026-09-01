@@ -14,6 +14,16 @@ from freetoken.moe.fused import moe_align_block_size, try_get_optimal_moe_config
 # grouped/sorted prefill kernel. GPT-OSS decode targets small batches (max running
 # requests), matching the gather path.
 MXFP4_DECODE_MAX_TOKENS = 16
+_ROCM_ROUTE_PREFILL_CHUNK = 256
+
+
+def _needs_splitk_prefill_fallback() -> bool:
+    import triton
+
+    from freetoken.utils.arch import get_rocm_gfx_arch, is_rocm
+
+    release = tuple(int(part) for part in triton.__version__.split(".")[:2])
+    return is_rocm() and get_rocm_gfx_arch() == "gfx1101" and release >= (3, 8)
 
 
 def gpt_oss_swiglu(gate_up: torch.Tensor, *, alpha: float, limit: float | None) -> torch.Tensor:
@@ -104,6 +114,30 @@ def run_mxfp4_prefill_experts_t(
         topk_weights = topk_weights.contiguous()
     if not topk_ids.is_contiguous():
         topk_ids = topk_ids.contiguous()
+
+    # AMD Triton 3.8 can spend indefinitely compiling the grouped transposed
+    # MXFP4 kernel. The split-K route path supports arbitrary token counts and
+    # is graph-safe, so prefer it on ROCm 10 until the compiler regression is
+    # resolved. CUDA and older ROCm stacks keep the faster grouped prefill.
+    if _needs_splitk_prefill_fallback():
+        output = torch.empty_like(hidden_states)
+        for start in range(0, hidden_states.shape[0], _ROCM_ROUTE_PREFILL_CHUNK):
+            end = min(start + _ROCM_ROUTE_PREFILL_CHUNK, hidden_states.shape[0])
+            output[start:end] = run_mxfp4_splitk_decode_experts(
+                hidden_states[start:end].contiguous(),
+                topk_weights[start:end].contiguous(),
+                topk_ids[start:end].contiguous(),
+                gate_up_blocks_t,
+                gate_up_scales_t,
+                gate_up_bias,
+                down_blocks_t,
+                down_scales_t,
+                down_bias,
+                top_k=top_k,
+                hidden_act_alpha=hidden_act_alpha,
+                swiglu_limit=swiglu_limit,
+            )
+        return output
 
     num_tokens = hidden_states.shape[0]
     num_weight_experts = gate_up_blocks_t.shape[0]
@@ -204,6 +238,20 @@ def _decode_split_count(routes: int, k_groups: int, target_programs: int) -> int
     return max(1, min(k_groups, -(-target_programs // max(routes, 1))))
 
 
+def _decode_geometry() -> tuple[int, int, int]:
+    """Return ``(gate/down target programs, block_n, warps)`` for decode GEMV."""
+    import triton
+
+    from freetoken.utils.arch import get_rocm_gfx_arch
+
+    release = tuple(int(part) for part in triton.__version__.split(".")[:2])
+    if get_rocm_gfx_arch() == "gfx1101" and release >= (3, 8):
+        # ROCm 10 / AMD Triton 3.8 sweep, M=1 top_k=4: 30 splits and
+        # 128 output columns per program minimize both gate/up and down.
+        return 120, 128, 1
+    return 0, 64, 1
+
+
 def run_mxfp4_splitk_decode_experts(
     hidden_states: torch.Tensor,
     topk_weights: torch.Tensor,
@@ -240,6 +288,7 @@ def run_mxfp4_splitk_decode_experts(
 
     route_experts = topk_ids.reshape(-1).to(torch.int64)
     route_weights = topk_weights.reshape(-1).contiguous()
+    tuned_target, block_n, num_warps = _decode_geometry()
     if M == 1:
         # all routes share the single token: broadcast it (stride_xe=0), no gather.
         routed_x = hidden_states
@@ -249,10 +298,12 @@ def run_mxfp4_splitk_decode_experts(
         routed_x = hidden_states.index_select(0, route_tokens).contiguous()
         gu_stride_xe = routed_x.stride(0)
 
-    gu_splits = _decode_split_count(routes, H // 32, target_programs=180)
+    gu_target = tuned_target or 180
+    gu_splits = _decode_split_count(routes, H // 32, target_programs=gu_target)
     gate_up_out = mxfp4_splitk_gemv_triton(
         routed_x, gate_up_blocks_t, gate_up_scales_t, gate_up_bias,
         route_experts, N=two_I, K=H, stride_xe=gu_stride_xe, num_splits=gu_splits,
+        block_n=block_n, num_warps=num_warps,
     )
 
     hidden_out = torch.empty((routes, local_intermediate_size), device=device, dtype=compute_type)
@@ -263,11 +314,15 @@ def run_mxfp4_splitk_decode_experts(
         compute_type=compute_type,
     )
 
-    dp_splits = _decode_split_count(routes, local_intermediate_size // 32, target_programs=72)
+    dp_target = tuned_target or 72
+    dp_splits = _decode_split_count(
+        routes, local_intermediate_size // 32, target_programs=dp_target
+    )
     down_out = mxfp4_splitk_gemv_triton(
         hidden_out, down_blocks_t, down_scales_t, down_bias,
         route_experts, N=H, K=local_intermediate_size,
         stride_xe=hidden_out.stride(0), num_splits=dp_splits, expert_wts=route_weights,
+        block_n=block_n, num_warps=num_warps,
     )
 
     return down_out.view(M, top_k, H).sum(dim=1).to(compute_type)

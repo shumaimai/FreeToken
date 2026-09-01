@@ -465,12 +465,32 @@ def test_decode_triton_attention_16_split_capacity_matches_reference(seq_len: in
         (4, 16, 2, 256, (8192, 8)),
     ],
 )
-def test_gfx1101_decode_split_policy(batch, q_heads, kv_heads, head_dim, expected):
+def test_gfx1101_decode_split_policy_before_triton_38(
+    batch, q_heads, kv_heads, head_dim, expected
+):
     from freetoken.kernel.triton.attention import _gfx1101_decode_split_policy
 
     assert _gfx1101_decode_split_policy(
-        batch, q_heads, kv_heads, head_dim
+        batch, q_heads, kv_heads, head_dim, triton_release=(3, 7)
     ) == expected
+
+
+@pytest.mark.parametrize(
+    ("batch", "q_heads", "kv_heads", "head_dim"),
+    [
+        (1, 16, 2, 256),
+        (1, 32, 8, 128),
+        (4, 16, 2, 256),
+    ],
+)
+def test_gfx1101_decode_split_policy_triton_38_uses_full_capacity(
+    batch, q_heads, kv_heads, head_dim
+):
+    from freetoken.kernel.triton.attention import _gfx1101_decode_split_policy
+
+    assert _gfx1101_decode_split_policy(
+        batch, q_heads, kv_heads, head_dim, triton_release=(3, 8)
+    ) == (0, 16)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="Triton attention needs CUDA")

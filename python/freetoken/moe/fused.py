@@ -11,6 +11,16 @@ from freetoken.utils import div_ceil, init_logger
 logger = init_logger(__name__)
 
 _warned_torch_topk = False
+_ROCM_ROUTE_PREFILL_CHUNK = 256
+
+
+def _needs_route_moe_fallback() -> bool:
+    import triton
+
+    from freetoken.utils.arch import get_rocm_gfx_arch, is_rocm
+
+    release = tuple(int(part) for part in triton.__version__.split(".")[:2])
+    return is_rocm() and get_rocm_gfx_arch() == "gfx1101" and release >= (3, 8)
 
 
 def _torch_fused_topk(
@@ -285,6 +295,24 @@ def fused_experts_impl(
     assert w1.is_contiguous(), "Expert weights1 must be contiguous"
     assert w2.is_contiguous(), "Expert weights2 must be contiguous"
     assert hidden_states.dtype in [torch.float32, torch.float16, torch.bfloat16]
+    if _needs_route_moe_fallback() and hidden_states.dtype != torch.float32:
+        # AMD Triton 3.8 can spend indefinitely compiling the grouped MoE
+        # kernel. The route kernel supports arbitrary token counts and HIP
+        # graphs; copy its result back to preserve this function's in-place
+        # output contract.
+        for start in range(0, hidden_states.shape[0], _ROCM_ROUTE_PREFILL_CHUNK):
+            end = min(start + _ROCM_ROUTE_PREFILL_CHUNK, hidden_states.shape[0])
+            result = fused_experts_decode_impl(
+                hidden_states[start:end].contiguous(),
+                w1,
+                w2,
+                topk_weights[start:end].contiguous(),
+                topk_ids[start:end].contiguous(),
+                activation,
+                apply_router_weight_on_input,
+            )
+            hidden_states[start:end].copy_(result)
+        return hidden_states
     num_tokens, _ = hidden_states.shape
     E, N, _ = w1.shape
     M = num_tokens

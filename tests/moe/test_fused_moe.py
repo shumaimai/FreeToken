@@ -58,6 +58,44 @@ def test_fused_topk_accepts_triton_kernel_tuple_output():
     torch.testing.assert_close(weights, ref_weights, rtol=2e-4, atol=2e-4)
 
 
+def test_rocm_triton38_uses_route_moe_fallback(monkeypatch):
+    import triton
+
+    from freetoken.moe import fused
+
+    monkeypatch.setattr(triton, "__version__", "3.8.0")
+    monkeypatch.setattr("freetoken.utils.arch.is_rocm", lambda: True)
+    monkeypatch.setattr("freetoken.utils.arch.get_rocm_gfx_arch", lambda: "gfx1101")
+    assert fused._needs_route_moe_fallback()
+
+    monkeypatch.setattr(triton, "__version__", "3.7.0")
+    assert not fused._needs_route_moe_fallback()
+
+
+def test_route_moe_fallback_chunks_long_prefill(monkeypatch):
+    from freetoken.moe import fused
+
+    calls = []
+
+    def fake_decode(hidden, *_args, **_kwargs):
+        calls.append(hidden.shape[0])
+        return hidden + 1
+
+    monkeypatch.setattr(fused, "_needs_route_moe_fallback", lambda: True)
+    monkeypatch.setattr(fused, "fused_experts_decode_impl", fake_decode)
+    hidden = torch.zeros(257, 4, dtype=torch.bfloat16)
+    w1 = torch.zeros(2, 8, 4, dtype=torch.bfloat16)
+    w2 = torch.zeros(2, 4, 4, dtype=torch.bfloat16)
+    weights = torch.ones(257, 1, dtype=torch.float32)
+    ids = torch.zeros(257, 1, dtype=torch.int32)
+
+    output = fused.fused_experts_impl(hidden, w1, w2, weights, ids)
+
+    assert calls == [256, 1]
+    assert output is hidden
+    assert torch.equal(output, torch.ones_like(output))
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 @pytest.mark.parametrize("batch_size", [1, 2, 4, 8, 16, 24])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])

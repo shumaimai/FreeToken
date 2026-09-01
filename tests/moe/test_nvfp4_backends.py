@@ -39,6 +39,53 @@ _E2M1 = torch.tensor(
 )
 
 
+def test_rocm_triton38_uses_nvfp4_route_prefill_fallback(monkeypatch):
+    import triton
+
+    from freetoken.moe import fused_nvfp4
+
+    monkeypatch.setattr(triton, "__version__", "3.8.0")
+    monkeypatch.setattr("freetoken.utils.arch.is_rocm", lambda: True)
+    monkeypatch.setattr("freetoken.utils.arch.get_rocm_gfx_arch", lambda: "gfx1101")
+    assert fused_nvfp4._needs_route_prefill_fallback()
+
+    monkeypatch.setattr(triton, "__version__", "3.7.0")
+    assert not fused_nvfp4._needs_route_prefill_fallback()
+
+
+def test_nvfp4_route_prefill_fallback_chunks_long_prefill(monkeypatch):
+    from freetoken.moe import fused_nvfp4
+
+    calls = []
+
+    def fake_decode(hidden, *_args, **_kwargs):
+        calls.append(hidden.shape[0])
+        return hidden + 1
+
+    monkeypatch.setattr(fused_nvfp4, "_needs_route_prefill_fallback", lambda: True)
+    monkeypatch.setattr(fused_nvfp4, "fused_experts_decode_nvfp4_marlin", fake_decode)
+    hidden = torch.zeros(257, 4, dtype=torch.bfloat16)
+    weights = torch.ones(257, 1, dtype=torch.float32)
+    ids = torch.zeros(257, 1, dtype=torch.int32)
+    bank = torch.empty(1)
+
+    output = fused_nvfp4.fused_experts_nvfp4(
+        hidden,
+        bank,
+        bank,
+        bank,
+        bank,
+        bank,
+        bank,
+        weights,
+        ids,
+        num_experts=1,
+    )
+
+    assert calls == [256, 1]
+    assert torch.equal(output, torch.ones_like(output))
+
+
 def _dequant_ref(packed: torch.Tensor, scale: torch.Tensor, row_global: torch.Tensor) -> torch.Tensor:
     """[N, K//2] u8 + [N, K//16] e4m3 + [N] global -> [N, K] fp32 (low nibble first)."""
     n, k2 = packed.shape

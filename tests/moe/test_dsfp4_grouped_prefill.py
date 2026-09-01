@@ -67,7 +67,14 @@ def test_grouped_gemms_within_one_ulp_of_gemv(block_m):
         act_quant_fp8_roundtrip,
     )
     from freetoken.moe.fused import moe_align_block_size
-    from freetoken.moe.fused_ds_fp4 import _grouped_decode, _grouped_prefill
+    from freetoken.moe.fused_ds_fp4 import (
+        _grouped_decode,
+        _grouped_prefill,
+        _needs_route_prefill_fallback,
+    )
+
+    if _needs_route_prefill_fallback():
+        pytest.skip("ROCm 10 uses the route-prefill fallback, not this grouped kernel")
 
     device = "cuda"
     gup, gus, dp, ds = _banks(device)
@@ -128,3 +135,41 @@ def test_sparse_chunk_falls_back_to_gemv():
     ref = fmod.routed_experts_fp4(x, slots.clone(), w, gup, gus, dp, ds, LIMIT)
     out = fmod.routed_experts_fp4_prefill(x, slots.clone(), w, gup, gus, dp, ds, LIMIT, E)
     assert torch.equal(ref, out)
+
+
+def test_rocm_triton38_uses_route_prefill_fallback(monkeypatch):
+    import triton
+
+    import freetoken.moe.fused_ds_fp4 as fmod
+
+    monkeypatch.setattr(triton, "__version__", "3.8.0")
+    monkeypatch.setattr("freetoken.utils.arch.is_rocm", lambda: True)
+    monkeypatch.setattr("freetoken.utils.arch.get_rocm_gfx_arch", lambda: "gfx1101")
+    assert fmod._needs_route_prefill_fallback()
+
+    monkeypatch.setattr(triton, "__version__", "3.7.0")
+    assert not fmod._needs_route_prefill_fallback()
+
+
+def test_dsfp4_route_prefill_fallback_chunks_long_prefill(monkeypatch):
+    import freetoken.moe.fused_ds_fp4 as fmod
+
+    calls = []
+
+    def fake_route(x, *_args, **_kwargs):
+        calls.append(x.shape[0])
+        return x + 1
+
+    monkeypatch.setattr(fmod, "_needs_route_prefill_fallback", lambda: True)
+    monkeypatch.setattr(fmod, "routed_experts_fp4", fake_route)
+    x = torch.zeros(257, 4, dtype=torch.bfloat16)
+    slots = torch.zeros(257, 1, dtype=torch.int32)
+    weights = torch.ones(257, 1, dtype=torch.float32)
+    bank = torch.empty(1)
+
+    output = fmod.routed_experts_fp4_prefill(
+        x, slots, weights, bank, bank, bank, bank, LIMIT, num_rows=1
+    )
+
+    assert calls == [256, 1]
+    assert torch.equal(output, torch.ones_like(output))

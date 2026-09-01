@@ -174,6 +174,80 @@ def test_run_mxfp4_splitk_decode_experts_matches_reference(M):
     _mxfp4_dequant_reference(run_mxfp4_splitk_decode_experts, M, seed=21)
 
 
+def test_gfx1101_triton38_mxfp4_decode_geometry(monkeypatch):
+    import triton
+
+    from freetoken.moe import fused_mxfp4
+
+    monkeypatch.setattr(triton, "__version__", "3.8.0")
+    monkeypatch.setattr(
+        "freetoken.utils.arch.get_rocm_gfx_arch", lambda: "gfx1101"
+    )
+    assert fused_mxfp4._decode_geometry() == (120, 128, 1)
+
+
+def test_older_mxfp4_decode_geometry_is_preserved(monkeypatch):
+    import triton
+
+    from freetoken.moe import fused_mxfp4
+
+    monkeypatch.setattr(triton, "__version__", "3.7.0")
+    monkeypatch.setattr(
+        "freetoken.utils.arch.get_rocm_gfx_arch", lambda: "gfx1101"
+    )
+    assert fused_mxfp4._decode_geometry() == (0, 64, 1)
+
+
+def test_rocm_triton38_uses_splitk_prefill_fallback(monkeypatch):
+    import triton
+
+    from freetoken.moe import fused_mxfp4
+
+    monkeypatch.setattr(triton, "__version__", "3.8.0")
+    monkeypatch.setattr("freetoken.utils.arch.is_rocm", lambda: True)
+    monkeypatch.setattr("freetoken.utils.arch.get_rocm_gfx_arch", lambda: "gfx1101")
+    assert fused_mxfp4._needs_splitk_prefill_fallback()
+
+    monkeypatch.setattr(triton, "__version__", "3.7.0")
+    assert not fused_mxfp4._needs_splitk_prefill_fallback()
+
+
+@CUDA
+def test_splitk_prefill_fallback_chunks_long_prefill(monkeypatch):
+    from freetoken.moe import fused_mxfp4
+
+    calls = []
+
+    def fake_decode(hidden, *_args, **_kwargs):
+        calls.append(hidden.shape[0])
+        return hidden + 1
+
+    monkeypatch.setattr(fused_mxfp4, "_needs_splitk_prefill_fallback", lambda: True)
+    monkeypatch.setattr(fused_mxfp4, "run_mxfp4_splitk_decode_experts", fake_decode)
+    hidden = torch.zeros(257, 4, device="cuda", dtype=torch.bfloat16)
+    weights = torch.ones(257, 1, device="cuda", dtype=torch.float32)
+    ids = torch.zeros(257, 1, device="cuda", dtype=torch.int32)
+    bank = torch.empty(1, device="cuda")
+
+    output = fused_mxfp4.run_mxfp4_prefill_experts_t(
+        hidden,
+        weights,
+        ids,
+        bank,
+        bank,
+        bank,
+        bank,
+        bank,
+        bank,
+        top_k=1,
+        hidden_act_alpha=1.702,
+        swiglu_limit=7.0,
+    )
+
+    assert calls == [256, 1]
+    assert torch.equal(output, torch.ones_like(output))
+
+
 @CUDA
 @pytest.mark.parametrize("M", [24])  # M > MXFP4_DECODE_MAX_TOKENS (16): prefill path
 def test_run_mxfp4_prefill_experts_t_matches_reference(M):

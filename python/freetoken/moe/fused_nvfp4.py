@@ -61,6 +61,14 @@ _DECODE_WARPS = 4
 _DECODE_MARLIN_BLOCK_N = 16
 _DECODE_MARLIN_BLOCK_KW = 16
 _DECODE_MARLIN_WARPS = 4
+_ROCM_ROUTE_PREFILL_CHUNK = 256
+
+
+def _needs_route_prefill_fallback() -> bool:
+    from freetoken.utils.arch import get_rocm_gfx_arch, is_rocm
+
+    release = tuple(int(part) for part in triton.__version__.split(".")[:2])
+    return is_rocm() and get_rocm_gfx_arch() == "gfx1101" and release >= (3, 8)
 
 
 def _tl_dtype(dt: torch.dtype):
@@ -314,6 +322,29 @@ def fused_experts_nvfp4(
     """Prefill inline-NVFP4 MoE. ``topk_ids`` index rows of the bank tensors in
     ``[0, num_experts)``: full-layer banks with position == expert id (the
     materialized ``[:E]`` slot view or the overlap double buffer), raw ids."""
+    if _needs_route_prefill_fallback():
+        # AMD Triton 3.8 can spend indefinitely compiling the grouped NVFP4
+        # prefill kernel. The Marlin-style route GEMV supports arbitrary token
+        # counts and consumes the same native bank layout.
+        output = torch.empty_like(hidden_states)
+        for start in range(0, hidden_states.shape[0], _ROCM_ROUTE_PREFILL_CHUNK):
+            end = min(start + _ROCM_ROUTE_PREFILL_CHUNK, hidden_states.shape[0])
+            output[start:end] = fused_experts_decode_nvfp4_marlin(
+                hidden_states[start:end].contiguous(),
+                gate_up_packed,
+                gate_up_scale,
+                gate_up_global,
+                down_packed,
+                down_scale,
+                down_global,
+                topk_weights[start:end].contiguous(),
+                topk_ids[start:end].contiguous(),
+                activation,
+                apply_router_weight_on_input,
+                act_alpha,
+                act_limit,
+            )
+        return output
     M, H = hidden_states.shape
     top_k = topk_ids.shape[1]
     two_i = gate_up_packed.shape[1]

@@ -25,6 +25,14 @@ from freetoken.kernel.triton.dsv4.fused_moe import (
 from freetoken.moe.fused import moe_align_block_size
 
 _TL_DTYPE = None
+_ROCM_ROUTE_PREFILL_CHUNK = 256
+
+
+def _needs_route_prefill_fallback() -> bool:
+    from freetoken.utils.arch import get_rocm_gfx_arch, is_rocm
+
+    release = tuple(int(part) for part in triton.__version__.split(".")[:2])
+    return is_rocm() and get_rocm_gfx_arch() == "gfx1101" and release >= (3, 8)
 
 
 def _compute_type(dtype: torch.dtype):
@@ -198,6 +206,21 @@ def routed_experts_fp4_prefill(
     round-tripped activations; differs from the GEMV only in fp32 accumulation
     order (tl.dot tree vs sequential K-walk)."""
     T, top_k = slots.shape
+    if _needs_route_prefill_fallback():
+        output = torch.empty_like(x)
+        for start in range(0, T, _ROCM_ROUTE_PREFILL_CHUNK):
+            end = min(start + _ROCM_ROUTE_PREFILL_CHUNK, T)
+            output[start:end] = routed_experts_fp4(
+                x[start:end].contiguous(),
+                slots[start:end].contiguous(),
+                topk_weights[start:end].contiguous(),
+                gate_up_packed,
+                gate_up_scale,
+                down_packed,
+                down_scale,
+                swiglu_limit,
+            )
+        return output
     if T * top_k < _GROUPED_MIN_ROUTES:
         return routed_experts_fp4(
             x, slots, topk_weights,

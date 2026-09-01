@@ -16,13 +16,24 @@ def _gfx1101_decode_split_policy(
     num_q_heads: int,
     num_kv_heads: int,
     head_dim: int,
+    triton_release: tuple[int, int] | None = None,
 ) -> tuple[int, int]:
     """Return ``(long-context threshold, short-context split cap)`` for gfx1101.
 
     A static 16-slot grid keeps HIP graphs reusable. The active count stays below
     that capacity until the extra wave amortizes its merge cost. Eight splits
-    already launch at least one full 60-CU wave once batch/head parallelism is high.
+    already launch at least one full wave once batch/head parallelism is high.
+
+    AMD Triton 3.8 materially reduced split/merge overhead on gfx1101. A ROCm 10
+    sweep found all 16 splits fastest down to 128 tokens, so only older compiler
+    stacks retain the short-context cap.
     """
+    if triton_release is None:
+        match = triton.__version__.split(".")
+        triton_release = int(match[0]), int(match[1])
+    if triton_release >= (3, 8):
+        return 0, 16
+
     group = num_q_heads // num_kv_heads
     valid_block_h = min(16, group)
     head_blocks = num_kv_heads * triton.cdiv(group, valid_block_h)
