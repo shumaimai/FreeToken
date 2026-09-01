@@ -13,10 +13,24 @@ from __future__ import annotations
 
 import json
 import os
+from importlib import metadata
 
 from freetoken.utils import init_logger
 
 logger = init_logger(__name__)
+
+_STACK_PACKAGES = ("torch", "triton", "rocm")
+
+
+def runtime_stack_fingerprint() -> dict[str, str | None]:
+    """Package versions that can change measured MoE and PCIe kernel behavior."""
+    versions: dict[str, str | None] = {}
+    for package in _STACK_PACKAGES:
+        try:
+            versions[package] = metadata.version(package)
+        except metadata.PackageNotFoundError:
+            versions[package] = None
+    return versions
 
 # Engine ``expert_quant`` (models/config.py) -> benchbw format key (offload_cache._BANK_SCHEMAS
 # / benchbw._offload_bank_specs). Only the offload-family formats with a CPU MoE weight path can
@@ -106,6 +120,14 @@ def _usable_profile(
         logger.warning(
             f"benchbw profile {src} was measured on {prof_gpu!r}, not this GPU "
             f"({gpu_name!r}); ignoring it"
+        )
+        return None
+    measured_stack = prof.get("stack")
+    current_stack = runtime_stack_fingerprint()
+    if measured_stack != current_stack:
+        logger.warning(
+            f"benchbw profile {src} was measured with stack {measured_stack!r}, "
+            f"not {current_stack!r}; ignoring it and requiring `ft bench bw` again"
         )
         return None
     return prof

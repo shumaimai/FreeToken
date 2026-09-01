@@ -56,6 +56,7 @@ from freetoken.gpu_select import (
     single_gpu_arg,
 )
 from freetoken.kernel.pinned import alloc_pinned_tensor
+from freetoken.moe.bench_profile import runtime_stack_fingerprint
 from freetoken.moe.cpu_executor import physical_core_cpus, resolve_threads_and_affinity
 from freetoken.utils import init_logger
 
@@ -775,12 +776,13 @@ def run_benchbw(
     _prog("done")
 
     result = {
-        "version": 4,
+        "version": 5,
         "timestamp": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "epoch": int(time.time()),
         "host": socket.gethostname(),
         # index is the CUDA ordinal the bench ran on; uuid keys the profile file
         "gpu": {"index": device_index, "name": gpu["name"], "uuid": gpu["uuid"]},
+        "stack": runtime_stack_fingerprint(),
         "cpu": {"physical_cores": len(physical_core_cpus()), "threads_used": cpu["threads"]},
         "threshold": threshold,
         "ceilings": {

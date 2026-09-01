@@ -11,7 +11,12 @@ import os
 import pytest
 import torch
 
-from freetoken.moe.bench_profile import default_profile_path, load_backend_recommendation, load_hybrid_fetch_fraction
+from freetoken.moe.bench_profile import (
+    default_profile_path,
+    load_backend_recommendation,
+    load_hybrid_fetch_fraction,
+    runtime_stack_fingerprint,
+)
 from freetoken.moe.offload_cache import OffloadMoeCache
 
 Q = 1 << 16
@@ -43,6 +48,7 @@ def test_balanced_fetch_tracks_fraction():
 def test_load_hybrid_fetch_fraction(tmp_path):
     prof = {
         "gpu": {"name": "FAKE GPU"},
+        "stack": runtime_stack_fingerprint(),
         "dtype_kernels": {
             "bf16": {"cpu_moe_gbs": 100.0, "pcie_gather_gbs": 40.0},
             # overlapped (contended) pair wins over the standalone numbers when present
@@ -74,7 +80,14 @@ def test_profile_lookup_prefers_the_gpu_uuid_file(tmp_path, monkeypatch):
     def write(path, name, verdict):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
-            json.dump({"gpu": {"name": name}, "dtypes": {"bf16": verdict}}, f)
+            json.dump(
+                {
+                    "gpu": {"name": name},
+                    "stack": runtime_stack_fingerprint(),
+                    "dtypes": {"bf16": verdict},
+                },
+                f,
+            )
 
     # legacy single file only: used when the name matches, ignored otherwise
     write(default_profile_path(), "FAKE GPU", "hybrid")
@@ -83,6 +96,20 @@ def test_profile_lookup_prefers_the_gpu_uuid_file(tmp_path, monkeypatch):
     # this card's own file wins over the legacy one
     write(default_profile_path(uuid), "FAKE GPU", "offload")
     assert load_backend_recommendation("bf16", gpu_name="FAKE GPU", gpu_uuid=uuid) == "offload"
+
+
+def test_profile_from_another_software_stack_is_ignored(tmp_path):
+    path = tmp_path / "benchbw.json"
+    path.write_text(
+        json.dumps(
+            {
+                "gpu": {"name": "FAKE GPU"},
+                "stack": {"torch": "2.11.0+rocm7.2.4", "triton": "3.7.0", "rocm": None},
+                "dtypes": {"bf16": "hybrid"},
+            }
+        )
+    )
+    assert load_backend_recommendation("bf16", gpu_name="FAKE GPU", path=str(path)) is None
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
