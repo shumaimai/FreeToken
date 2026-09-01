@@ -36,8 +36,8 @@ def _rocm_paths() -> tuple[list[str], list[str], str]:
     if ROCM_HOME:
         candidates.append(Path(ROCM_HOME))
 
-    # ROCm 7.14 PyTorch images ship the SDK as a Python package instead of
-    # installing it at /opt/rocm.
+    # TheRock-based ROCm 7.14+ PyTorch packages ship the SDK as a Python
+    # package instead of installing it at /opt/rocm.
     spec = importlib.util.find_spec("_rocm_sdk_core")
     if spec and spec.submodule_search_locations:
         candidates.append(Path(next(iter(spec.submodule_search_locations))))

@@ -21,7 +21,7 @@ def select_versioned_rocm_runtime(paths):
     """Return the highest numeric libamdhip64 soname from ``paths``.
 
     Path/string lexical order is not a version order: for example ``7.9`` sorts
-    after ``7.14``. Keep this helper package-independent so both setup.py and
+    after ``7.14`` and ``10.0``. Keep this helper package-independent so both setup.py and
     runtime JIT discovery can use the same selection contract.
     """
     candidates = []

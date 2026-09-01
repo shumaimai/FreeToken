@@ -212,7 +212,8 @@ def _validate_attention_backend_choice(config, override, required: frozenset[Att
         if info.requires_sgl_kernel and not _sgl_flash_attn_available():
             raise RuntimeError(
                 f"Attention backend {config.attention_backend!r} requires sgl_kernel, which is "
-                "not installed. Install it with `pip install 'freetoken[sgl]'` (or "
+                "not installed. On CUDA/Torch 2.13 install it with `pip install "
+                "'freetoken[sgl]'` (or "
                 "'freetoken[accel]'), or use --attention-backend triton."
             )
         if info.requires_sm100 and not is_sm100_family():
@@ -1026,8 +1027,8 @@ def _ensure_expandable_segments() -> None:
     ``expandable_segments`` lets freed regions of any size be reused, keeping
     reserved ~= allocated, so it is applied to every run, not just offload ones.
 
-    ROCm is excluded: PyTorch 2.11's HIP allocator can report ample free VRAM after
-    graph capture but fail the next allocation when expandable segments are enabled.
+    ROCm is excluded: HIP graph workloads can report ample free VRAM after graph
+    capture but fail the next allocation when expandable segments are enabled.
 
     Env vars are parsed once at import and ignored if set afterwards, so we apply the
     setting via the runtime API instead. Must run before the first CUDA allocation (the

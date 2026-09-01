@@ -62,6 +62,10 @@ def _hip_cflags(extra: List[str]) -> List[str]:
 
         detected = get_rocm_gfx_arch()
         arches = [detected] if detected else list(DEFAULT_ROCM_ARCHES)
+    # TheRock Python SDKs do not include rocm_agent_enumerator, so TVM-FFI
+    # cannot rediscover the target after FreeToken already did. Preserve an
+    # explicit user value and otherwise pass our resolved architecture through.
+    os.environ.setdefault("TVM_FFI_ROCM_ARCH_LIST", " ".join(arches))
     return flags + [f"--offload-arch={arch}" for arch in arches]
 
 
@@ -81,8 +85,8 @@ def _rocm_link_flags() -> List[str]:
     """Make ROCm's runtime library discoverable to JIT link commands.
 
     Traditional ROCm installs provide ``libamdhip64.so`` under ``$ROCM_HOME/lib``.
-    ROCm 7.14 Python SDK images only provide the versioned soname, while TVM-FFI
-    still links with ``-lamdhip64``. Supply a cache-local unversioned symlink via
+    TheRock-based ROCm 7.14+ Python SDKs only provide the versioned soname, while
+    TVM-FFI still links with ``-lamdhip64``. Supply a cache-local unversioned symlink via
     an explicit linker search path without modifying the Python environment.
 
     The compatibility directory is keyed by the resolved runtime origin so a

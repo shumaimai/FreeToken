@@ -23,11 +23,12 @@ def test_rocm_versioned_runtime_selection_is_numeric_not_lexical() -> None:
         Path("/sdk/lib/libamdhip64.so.7"),
         Path("/sdk/lib/libamdhip64.so.7.9"),
         Path("/sdk/lib/libamdhip64.so.7.14"),
+        Path("/sdk/lib/libamdhip64.so.10.0"),
         Path("/sdk/lib/libamdhip64.so.debug"),
     ]
     selected = module.select_versioned_rocm_runtime(candidates)
     assert selected is not None
-    assert selected.name == "libamdhip64.so.7.14"
+    assert selected.name == "libamdhip64.so.10.0"
 
     setup_text = SETUP.read_text()
     assert "select_versioned_rocm_runtime" in setup_text
@@ -36,4 +37,4 @@ def test_rocm_versioned_runtime_selection_is_numeric_not_lexical() -> None:
 
 if __name__ == "__main__":
     test_rocm_versioned_runtime_selection_is_numeric_not_lexical()
-    print("ROCM_VERSIONED_RUNTIME_SELECTION=PASS_NUMERIC_7_14_OVER_7_9")
+    print("ROCM_VERSIONED_RUNTIME_SELECTION=PASS_NUMERIC_10_0_OVER_7_14")

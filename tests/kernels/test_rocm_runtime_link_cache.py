@@ -35,7 +35,7 @@ def test_versioned_rocm_runtime_link_cache_tracks_runtime_origin_and_numeric_ver
         first_old = first_root / "lib" / "libamdhip64.so.7.9"
         first_new = first_root / "lib" / "libamdhip64.so.7.14"
         first_debug = first_root / "lib" / "libamdhip64.so.debug"
-        second_lib = second_root / "lib" / "libamdhip64.so.7.15"
+        second_lib = second_root / "lib" / "libamdhip64.so.10.0"
         first_old.parent.mkdir(parents=True)
         second_lib.parent.mkdir(parents=True)
         home.mkdir()
@@ -72,6 +72,32 @@ def test_versioned_rocm_runtime_link_cache_tracks_runtime_origin_and_numeric_ver
         utils_text = UTILS.read_text()
         assert "select_versioned_rocm_runtime" in utils_text
         assert 'sorted(library_dir.glob("libamdhip64.so.*"))' not in utils_text
+
+
+def test_rocm_jit_exports_detected_arch_for_therock_sdk() -> None:
+    module = _load_utils_module()
+    with mock.patch.dict(
+        os.environ,
+        {"FREETOKEN_ROCM_ARCH": "gfx1101"},
+        clear=True,
+    ):
+        flags = module._hip_cflags([])
+        assert os.environ["TVM_FFI_ROCM_ARCH_LIST"] == "gfx1101"
+        assert "--offload-arch=gfx1101" in flags
+
+
+def test_rocm_jit_preserves_explicit_tvm_arch_list() -> None:
+    module = _load_utils_module()
+    with mock.patch.dict(
+        os.environ,
+        {
+            "FREETOKEN_ROCM_ARCH": "gfx1101",
+            "TVM_FFI_ROCM_ARCH_LIST": "gfx1201",
+        },
+        clear=True,
+    ):
+        module._hip_cflags([])
+        assert os.environ["TVM_FFI_ROCM_ARCH_LIST"] == "gfx1201"
 
 
 if __name__ == "__main__":
