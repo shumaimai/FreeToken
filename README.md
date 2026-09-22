@@ -89,3 +89,9 @@ learned the design and reused code from the following projects:
 
 [Apache License 2.0](LICENSE). Third-party source attributions and compatible
 license notices are collected in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Fork development assistance
+
+- **ChatGPT (OpenAI)** — assisted with discussion of the ROCm port, testing approach, and optimization options for this fork. This is not a claim of authorship of upstream FreeToken code.
+
+AI-assistance acknowledgement only; commit authorship remains in Git history and no official OpenAI endorsement is implied.
